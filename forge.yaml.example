@@ -1,0 +1,52 @@
+# Forge Configuration
+# Copy this file to `forge.yaml` and customize for your project.
+
+name: my-project
+language: rust
+
+agents:
+  planner:
+    model: claude-sonnet-4-20250514
+    max_tokens: 4096
+    temperature: 0.2
+  coder:
+    model: claude-sonnet-4-20250514
+    max_tokens: 8192
+    temperature: 0.2
+  reviewer:
+    model: gpt-4o
+    max_tokens: 4096
+    temperature: 0.1
+    max_review_rounds: 3
+  deployer:
+    model: claude-sonnet-4-20250514
+    max_tokens: 4096
+    temperature: 0.1
+  verifier:
+    model: claude-sonnet-4-20250514
+    max_tokens: 4096
+    temperature: 0.1
+
+deploy:
+  target: rust-service
+  config:
+    registry: ghcr.io
+    image_prefix: myorg/
+
+runtime:
+  max_pipeline_duration_ms: 600000  # 10 minutes
+  max_agent_tokens: 16384
+  max_shell_commands: 50
+  allowed_shell_commands:
+    - cargo
+    - rustc
+    - docker
+    - kubectl
+    - npm
+    - bun
+    - python3
+    - git
+
+spacetime:
+  host: http://localhost:3000
+  db_name: forge_feedback

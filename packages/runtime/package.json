@@ -1,0 +1,32 @@
+{
+  "name": "@forge/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit",
+    "test": "bun test",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@spacetimedb/sdk": "^1.0.0",
+    "openai": "^4.80.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.0",
+    "nanoid": "^5.0.9",
+    "p-limit": "^6.1.0",
+    "workflow": "^4.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "^1.2.0"
+  }
+}

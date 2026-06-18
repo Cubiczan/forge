@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package forge.orchestrator;
+
+// The orchestrator service manages container lifecycle for agent execution
+service Orchestrator {
+  // Create a new container for an agent run
+  rpc CreateContainer(CreateContainerRequest) returns (CreateContainerResponse);
+  
+  // Execute a command inside a container
+  rpc ExecCommand(ExecCommandRequest) returns (ExecCommandResponse);
+  
+  // Stream command output in real-time
+  rpc StreamCommand(ExecCommandRequest) returns (stream CommandOutput);
+  
+  // Stop and remove a container
+  rpc DestroyContainer(DestroyContainerRequest) returns (DestroyContainerResponse);
+  
+  // Get container status
+  rpc GetContainerStatus(ContainerStatusRequest) returns (ContainerStatusResponse);
+  
+  // Build a Docker image from context
+  rpc BuildImage(BuildImageRequest) returns (stream BuildOutput);
+  
+  // Push an image to a registry
+  rpc PushImage(PushImageRequest) returns (PushImageResponse);
+  
+  // Get resource usage for a container
+  rpc GetResourceUsage(ResourceUsageRequest) returns (ResourceUsageResponse);
+}
+
+message CreateContainerRequest {
+  string pipeline_id = 1;
+  string agent_name = 2;
+  string image = 3;              // Base image (e.g. "rust:1.80-bookworm")
+  repeated string env = 4;       // Environment variables KEY=VALUE
+  map<string, string> labels = 5;
+  int32 timeout_seconds = 6;
+  repeated Mount mounts = 7;
+}
+
+message Mount {
+  string source = 1;             // Host path
+  string target = 2;             // Container path
+  bool read_only = 3;
+}
+
+message CreateContainerResponse {
+  string container_id = 1;
+  string container_name = 2;
+}
+
+message ExecCommandRequest {
+  string container_id = 1;
+  repeated string command = 2;   // Command and args, e.g. ["cargo", "build"]
+  int32 timeout_seconds = 3;
+  string working_dir = 4;
+}
+
+message ExecCommandResponse {
+  int32 exit_code = 1;
+  string stdout = 2;
+  string stderr = 3;
+  int64 duration_ms = 4;
+}
+
+message CommandOutput {
+  oneof output {
+    string stdout = 1;
+    string stderr = 2;
+    CommandResult result = 3;
+  }
+}
+
+message CommandResult {
+  int32 exit_code = 1;
+  int64 duration_ms = 2;
+}
+
+message DestroyContainerRequest {
+  string container_id = 1;
+  bool force = 2;
+}
+
+message DestroyContainerResponse {
+  bool success = 1;
+}
+
+message ContainerStatusRequest {
+  string container_id = 1;
+}
+
+message ContainerStatusResponse {
+  string container_id = 1;
+  string status = 2;            // "running", "exited", "dead"
+  int32 exit_code = 3;
+  int64 created_at = 4;
+  int64 finished_at = 5;
+}
+
+message BuildImageRequest {
+  string pipeline_id = 1;
+  string dockerfile_path = 2;
+  string context_path = 3;
+  string tag = 4;
+  map<string, string> build_args = 5;
+}
+
+message BuildOutput {
+  oneof output {
+    string stream = 1;
+    BuildResult result = 2;
+  }
+}
+
+message BuildResult {
+  bool success = 1;
+  string image_id = 2;
+  int64 duration_ms = 3;
+}
+
+message PushImageRequest {
+  string image_tag = 1;
+  string registry = 2;
+  string username = 3;
+  string password = 4;
+}
+
+message PushImageResponse {
+  bool success = 1;
+  string digest = 2;
+}
+
+message ResourceUsageRequest {
+  string container_id = 1;
+}
+
+message ResourceUsageResponse {
+  int64 cpu_usage_nanoseconds = 1;
+  int64 memory_usage_bytes = 2;
+  int64 memory_limit_bytes = 3;
+  int64 network_rx_bytes = 4;
+  int64 network_tx_bytes = 5;
+}

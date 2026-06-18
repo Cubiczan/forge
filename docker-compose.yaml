@@ -1,0 +1,36 @@
+services:
+  spacetime:
+    image: clockworklabs/spacetime:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - spacetimedata:/spacetime
+    command: start --db-path /spacetime
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: packages/orchestrator/Dockerfile
+    ports:
+      - "50051:50051"
+    depends_on:
+      - spacetime
+    environment:
+      - SPACETIME_HOST=http://spacetime:3000
+      - GRPC_PORT=50051
+
+  runtime:
+    build:
+      context: .
+      dockerfile: packages/runtime/Dockerfile
+    depends_on:
+      - spacetime
+      - orchestrator
+    environment:
+      - SPACETIME_HOST=http://spacetime:3000
+      - ORCHESTRATOR_ADDR=orchestrator:50051
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+
+volumes:
+  spacetimedata:

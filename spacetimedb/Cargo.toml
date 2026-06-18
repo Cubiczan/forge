@@ -8,5 +8,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 spacetimedb = "1"
-serde = { version = "1", features = ["derive"] }
-spacetimedb-sats = "1"
+spacetimedb-lib = "1"

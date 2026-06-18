@@ -1,5 +1,6 @@
 [workspace]
 members = [
     "packages/orchestrator",
+    "spacetimedb",
 ]
 resolver = "2"

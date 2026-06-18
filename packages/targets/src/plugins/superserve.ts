@@ -1,6 +1,4 @@
-import { exec } from 'child_process';
 import { promises as fs } from 'fs/promises';
-import { promisify } from 'util';
 import path from 'path';
 import type {
   DeployTarget,
@@ -12,338 +10,154 @@ import type {
   HealthCheckResult,
 } from '../index.js';
 
-const execAsync = promisify(exec);
-
-// ---------------------------------------------------------------------------
+// ============================================================
 // Superserve API types
-// ---------------------------------------------------------------------------
+// ============================================================
 
-interface SuperserveConfig {
-  api_key: string;
-  base_url: string;
-  memory_mb: number;
-  vcpus: number;
-  image: string;
-  env?: Record<string, string>;
-  health_path?: string;
-  port?: number;
-}
+const SUPERSEEVE_API_BASE = 'https://api.superserve.ai';
 
-interface VmCreateResponse {
+interface Sandbox {
   id: string;
   name: string;
+  snapshot_id: string;
+  vcpu_count: number;
+  memory_mib: number;
+  timeout_seconds: number;
   status: string;
-  ip_address?: string;
-  port?: number;
+  created_at: string;
 }
 
-interface VmStatusResponse {
-  id: string;
-  status: string;
-  ip_address?: string;
-  exit_code?: number;
+interface ExecResult {
+  stdout: string;
+  stderr: string;
+  exit_code: number;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+type ProjectType = 'rust' | 'python';
 
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function superserveRequest<T>(
-  config: SuperserveConfig,
-  method: string,
-  urlPath: string,
-  body?: unknown,
-): Promise<T> {
-  const url = `${config.base_url}${urlPath}`;
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${config.api_key}`,
-    'Content-Type': 'application/json',
-  };
-
-  const init: RequestInit = {
-    method,
-    headers,
-  };
-
-  if (body !== undefined) {
-    init.body = JSON.stringify(body);
-  }
-
-  const response = await fetch(url, init);
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '<no body>');
-    throw new Error(`Superserve API ${method} ${urlPath} returned ${response.status}: ${text}`);
-  }
-
-  // Some endpoints (DELETE) may return 204 with no body
-  const contentType = response.headers.get('content-type');
-  if (contentType && contentType.includes('application/json')) {
-    return response.json() as Promise<T>;
-  }
-
-  return undefined as unknown as T;
-}
-
-/**
- * Poll a VM until it reaches the desired status or times out.
- */
-async function waitForVmStatus(
-  config: SuperserveConfig,
-  vmId: string,
-  targetStatus: string,
-  timeoutMs: number = 60_000,
-  initialDelayMs: number = 200,
-  maxDelayMs: number = 5_000,
-): Promise<VmStatusResponse> {
-  const deadline = Date.now() + timeoutMs;
-  let delay = initialDelayMs;
-
-  while (Date.now() < deadline) {
-    await sleep(delay);
-
-    const vm = await superserveRequest<VmStatusResponse>(
-      config,
-      'GET',
-      `/vms/${vmId}`,
-    );
-
-    if (vm.status === targetStatus) {
-      return vm;
-    }
-
-    // Bail early on terminal failure states
-    if (vm.status === 'failed' || vm.status === 'error') {
-      throw new Error(`VM ${vmId} entered failed state: ${vm.status}`);
-    }
-
-    // Exponential backoff with cap
-    delay = Math.min(delay * 1.5, maxDelayMs);
-  }
-
-  throw new Error(
-    `VM ${vmId} did not reach "${targetStatus}" status within ${timeoutMs}ms`,
-  );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Parse the crate name from Cargo.toml.
- */
-async function parseCrateName(cargoPath: string): Promise<string> {
-  const content = await fs.readFile(cargoPath, 'utf-8');
-  const match = content.match(/name\s*=\s*"([^"]+)"/);
-  return match ? match[1] : 'app';
-}
-
-// ---------------------------------------------------------------------------
-// SuperserveTarget
-// ---------------------------------------------------------------------------
+// ============================================================
+// Superserve Target Plugin
+// ============================================================
 
 /**
  * Superserve deploy target.
  *
- * Deploys services as Firecracker micro-VMs via the Superserve API.
- * Builds the project locally (e.g. cargo build --release), then creates
- * a VM on Superserve with the specified image and env configuration.
+ * Replaces Docker-based rust-service and python-api targets with
+ * Firecracker microVM sandboxes via the Superserve API.
+ *
+ * Detects Rust (Cargo.toml) and Python (requirements.txt / pyproject.toml)
+ * projects, builds inside an ephemeral sandbox, then deploys to a
+ * long-running sandbox.
  */
 export class SuperserveTarget implements DeployTarget {
   readonly name = 'superserve';
-  readonly description =
-    'Deploy services as Firecracker micro-VMs via Superserve';
+  readonly description = 'Build and deploy using Superserve Firecracker microVMs';
 
-  // -----------------------------------------------------------------------
-  // validateConfig
-  // -----------------------------------------------------------------------
+  /** Map of deploymentId → sandbox ID for health checks and rollback */
+  private sandboxIds = new Map<string, string>();
+
+  /** Cached API key — set from config on every public method entry */
+  private apiKey = '';
+
+  // ----------------------------------------------------------
+  // DeployTarget interface
+  // ----------------------------------------------------------
 
   validateConfig(config: Record<string, unknown>): void {
     if (!config.api_key || typeof config.api_key !== 'string') {
       throw new Error(
-        'Superserve target requires "api_key" in config (string)',
+        'Superserve target requires a string "api_key" in deployment config'
       );
     }
-
-    if (config.base_url !== undefined && typeof config.base_url !== 'string') {
-      throw new Error('config.base_url must be a string if provided');
-    }
-
-    if (config.memory_mb !== undefined && typeof config.memory_mb !== 'number') {
-      throw new Error('config.memory_mb must be a number if provided');
-    }
-
-    if (config.vcpus !== undefined && typeof config.vcpus !== 'number') {
-      throw new Error('config.vcpus must be a number if provided');
-    }
-
-    if (!config.image || typeof config.image !== 'string') {
-      throw new Error(
-        'Superserve target requires "image" in config — the pre-built VM image to use',
-      );
-    }
-
-    if (config.health_path !== undefined && typeof config.health_path !== 'string') {
-      throw new Error('config.health_path must be a string if provided');
-    }
-
-    if (config.port !== undefined && typeof config.port !== 'number') {
-      throw new Error('config.port must be a number if provided');
-    }
   }
-
-  // -----------------------------------------------------------------------
-  // resolveConfig — fills in defaults
-  // -----------------------------------------------------------------------
-
-  private resolveConfig(raw: Record<string, unknown>): SuperserveConfig {
-    return {
-      api_key: raw.api_key as string,
-      base_url: (raw.base_url as string) || 'https://api.superserve.io/v1',
-      memory_mb: (raw.memory_mb as number) || 512,
-      vcpus: (raw.vcpus as number) || 2,
-      image: raw.image as string,
-      env: (raw.env as Record<string, string>) || {},
-      health_path: (raw.health_path as string) || '/health',
-      port: (raw.port as number) || 8080,
-    };
-  }
-
-  // -----------------------------------------------------------------------
-  // build
-  // -----------------------------------------------------------------------
 
   async build(context: BuildContext): Promise<BuildResult> {
     const start = Date.now();
-    context.onProgress('Checking project structure...');
+    const { projectDir, config, onProgress } = context;
 
-    const projectDir = context.projectDir;
+    this.apiKey = config.api_key as string;
 
-    // Try Rust project
-    const cargoPath = path.join(projectDir, 'Cargo.toml');
-    const hasCargo = await fileExists(cargoPath);
+    // 1. Detect project type
+    onProgress('Detecting project type...');
+    const projectType = await detectProjectType(projectDir);
 
-    if (hasCargo) {
-      return this.buildRust(context, cargoPath, start);
+    if (!projectType) {
+      return {
+        success: false,
+        output: '',
+        durationMs: Date.now() - start,
+        error:
+          'No supported project files found (need Cargo.toml, requirements.txt, or pyproject.toml)',
+      };
     }
 
-    // Try Python project
-    const hasRequirements = await fileExists(path.join(projectDir, 'requirements.txt'));
-    const hasPyproject = await fileExists(path.join(projectDir, 'pyproject.toml'));
-    const hasSetupPy = await fileExists(path.join(projectDir, 'setup.py'));
+    onProgress(`Detected ${projectType} project`);
 
-    if (hasRequirements || hasPyproject || hasSetupPy) {
-      return this.buildPython(context, start);
-    }
-
-    return {
-      success: false,
-      output: '',
-      durationMs: Date.now() - start,
-      error:
-        'No supported project structure found (Cargo.toml, requirements.txt, pyproject.toml, or setup.py)',
-    };
-  }
-
-  private async buildRust(
-    context: BuildContext,
-    cargoPath: string,
-    start: number,
-  ): Promise<BuildResult> {
-    const crateName = await parseCrateName(cargoPath);
-    context.onProgress(`Building Rust crate: ${crateName}`);
+    // 2. Create an ephemeral build sandbox
+    const buildSandboxName = `forge-build-${Date.now()}`;
+    let sandbox: Sandbox | null = null;
 
     try {
-      context.onProgress('Running cargo build --release...');
-      const { stdout, stderr } = await execAsync('cargo build --release', {
-        cwd: context.projectDir,
-        timeout: 600_000,
-        maxBuffer: 10 * 1024 * 1024,
-      });
+      onProgress('Creating Superserve build sandbox...');
+      sandbox = await this.createSandbox(buildSandboxName);
+      onProgress(`Build sandbox created: ${sandbox.id}`);
 
-      const binaryPath = path.join(
-        context.projectDir,
-        'target',
-        'release',
-        crateName,
-      );
+      // 3. Upload project files
+      onProgress('Uploading project files to sandbox...');
+      await this.uploadProjectFiles(sandbox.id, projectDir);
+      const fileCount = await countProjectFiles(projectDir);
+      onProgress(`Uploaded ${fileCount} file(s)`);
 
-      // Verify binary exists
-      if (!(await fileExists(binaryPath))) {
+      // 4. Run the build command
+      const buildCommand =
+        projectType === 'rust'
+          ? 'cd /app && cargo build --release 2>&1'
+          : 'cd /app && pip install -r requirements.txt 2>&1 || pip install -e . 2>&1';
+
+      onProgress(`Running: ${buildCommand}`);
+      const result = await this.execInSandbox(sandbox.id, buildCommand);
+
+      if (result.exit_code !== 0) {
+        const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
         return {
           success: false,
-          output: stdout || stderr,
+          output,
           durationMs: Date.now() - start,
-          error: `Build succeeded but binary not found at ${binaryPath}`,
+          error: `Build failed (exit ${result.exit_code}): ${result.stderr || result.stdout}`,
         };
       }
 
-      context.onProgress(`Binary built: ${binaryPath}`);
+      const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
       return {
         success: true,
-        artifactPath: binaryPath,
-        output: stdout || stderr,
+        artifactPath: projectType, // carry the detected type to deploy()
+        output: output || 'Build succeeded',
         durationMs: Date.now() - start,
       };
-    } catch (error: unknown) {
-      const err = error as { stderr?: string; message?: string };
+    } catch (error) {
       return {
         success: false,
         output: '',
         durationMs: Date.now() - start,
-        error: err.stderr || err.message || 'Cargo build failed',
+        error: error instanceof Error ? error.message : 'Build failed',
       };
+    } finally {
+      // Always tear down the build sandbox
+      if (sandbox) {
+        try {
+          onProgress('Cleaning up build sandbox...');
+          await this.destroySandbox(sandbox.id);
+        } catch {
+          // Best-effort cleanup — never throw from finally
+        }
+      }
     }
   }
-
-  private async buildPython(
-    context: BuildContext,
-    start: number,
-  ): Promise<BuildResult> {
-    context.onProgress('Installing Python dependencies...');
-    try {
-      const { stdout, stderr } = await execAsync(
-        'pip install -r requirements.txt 2>/dev/null || pip install -e ".[dev]" 2>/dev/null || pip install -e .',
-        {
-          cwd: context.projectDir,
-          timeout: 300_000,
-          maxBuffer: 10 * 1024 * 1024,
-        },
-      );
-
-      return {
-        success: true,
-        artifactPath: context.projectDir,
-        output: stdout || stderr || 'Python dependencies installed',
-        durationMs: Date.now() - start,
-      };
-    } catch (error: unknown) {
-      const err = error as { stderr?: string; message?: string };
-      return {
-        success: false,
-        output: '',
-        durationMs: Date.now() - start,
-        error: err.stderr || err.message || 'Python build failed',
-      };
-    }
-  }
-
-  // -----------------------------------------------------------------------
-  // deploy
-  // -----------------------------------------------------------------------
 
   async deploy(context: DeployContext): Promise<DeployResult> {
-    const { config: rawConfig, buildResult, deploymentId } = context;
+    const { projectDir, config, buildResult, deploymentId, onProgress } = context;
+
+    this.apiKey = config.api_key as string;
 
     if (!buildResult.success) {
       return {
@@ -354,165 +168,133 @@ export class SuperserveTarget implements DeployTarget {
       };
     }
 
-    const config = this.resolveConfig(rawConfig);
-    const vmName = `forge-${deploymentId}`;
-    const start = Date.now();
-
-    context.onProgress(`Creating Superserve VM: ${vmName}`);
-
-    // Merge any env vars from the build/deploy context
-    const env = { ...config.env };
-    if (buildResult.artifactPath) {
-      env['FORGE_ARTIFACT_PATH'] = buildResult.artifactPath;
-    }
+    const projectType = buildResult.artifactPath as ProjectType;
+    let sandbox: Sandbox | null = null;
 
     try {
-      // 1. Create the VM
-      const vm = await superserveRequest<VmCreateResponse>(config, 'POST', '/vms', {
-        name: vmName,
-        image: config.image,
-        env,
-        memory_mb: config.memory_mb,
-        vcpus: config.vcpus,
-        metadata: {
-          deployment_id: deploymentId,
-          deployed_by: 'forge',
-        },
-      });
+      // 1. Create a deployment sandbox
+      onProgress('Creating Superserve deployment sandbox...');
+      sandbox = await this.createSandbox(`forge-deploy-${deploymentId}`);
+      onProgress(`Deployment sandbox created: ${sandbox.id}`);
 
-      context.onProgress(`VM created: ${vm.id} (status: ${vm.status})`);
+      // Remember it for healthCheck() and rollback()
+      this.sandboxIds.set(deploymentId, sandbox.id);
 
-      // 2. Poll until running
-      context.onProgress('Waiting for VM to reach running state...');
-      const runningVm = await waitForVmStatus(config, vm.id, 'running', 60_000);
-      context.onProgress(`VM ${vm.id} is running`);
+      // 2. Upload project files
+      onProgress('Uploading project files to deployment sandbox...');
+      await this.uploadProjectFiles(sandbox.id, projectDir);
 
-      // 3. Build deployment URL
-      const ip = runningVm.ip_address || vm.ip_address;
-      const port = vm.port || config.port;
-      const deployUrl = ip ? `http://${ip}:${port}` : undefined;
-      const healthUrl = ip
-        ? `http://${ip}:${port}${config.health_path}`
-        : undefined;
+      // 3. Build + start the service inside the deployment sandbox
+      if (projectType === 'rust') {
+        onProgress('Building Rust service in deployment sandbox...');
+        const buildRes = await this.execInSandbox(
+          sandbox.id,
+          'cd /app && cargo build --release 2>&1'
+        );
+        if (buildRes.exit_code !== 0) {
+          throw new Error(
+            `Cargo build failed: ${buildRes.stderr || buildRes.stdout}`
+          );
+        }
+
+        // Start the binary in the background
+        onProgress('Starting Rust service...');
+        await this.execInSandbox(
+          sandbox.id,
+          'cd /app && nohup ./target/release/app > /tmp/service.log 2>&1 &'
+        );
+      } else {
+        onProgress('Installing Python dependencies in deployment sandbox...');
+        const installRes = await this.execInSandbox(
+          sandbox.id,
+          'cd /app && pip install -r requirements.txt 2>&1 || pip install -e . 2>&1'
+        );
+        if (installRes.exit_code !== 0) {
+          throw new Error(
+            `pip install failed: ${installRes.stderr || installRes.stdout}`
+          );
+        }
+
+        // Start with uvicorn in the background
+        onProgress('Starting Python API...');
+        await this.execInSandbox(
+          sandbox.id,
+          'cd /app && nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/service.log 2>&1 &'
+        );
+      }
+
+      onProgress('Service started in deployment sandbox');
 
       return {
         success: true,
-        deploymentId: vm.id,
-        url: deployUrl,
-        healthCheckUrl: healthUrl,
-        output: [
-          `VM ${vm.id} deployed successfully`,
-          `Status: ${runningVm.status}`,
-          deployUrl ? `URL: ${deployUrl}` : '',
-          healthUrl ? `Health: ${healthUrl}` : '',
-        ]
-          .filter(Boolean)
-          .join('\n'),
+        deploymentId,
+        url: `sandbox://${sandbox.id}`,
+        healthCheckUrl: `sandbox://${sandbox.id}/health`,
+        version: projectType,
+        output: `Deployed to Superserve sandbox ${sandbox.id}`,
       };
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error);
+      // Tear down on failure
+      if (sandbox) {
+        try {
+          await this.destroySandbox(sandbox.id);
+        } catch {
+          // best-effort
+        }
+        this.sandboxIds.delete(deploymentId);
+      }
+
       return {
         success: false,
         deploymentId,
         output: '',
-        error: `Superserve deployment failed: ${message}`,
+        error: error instanceof Error ? error.message : 'Deployment failed',
       };
     }
   }
-
-  // -----------------------------------------------------------------------
-  // rollback
-  // -----------------------------------------------------------------------
-
-  async rollback(
-    deploymentId: string,
-    config: Record<string, unknown>,
-  ): Promise<RollbackResult> {
-    const ssConfig = this.resolveConfig(config);
-
-    try {
-      // 1. Destroy the current VM
-      await superserveRequest(ssConfig, 'DELETE', `/vms/${deploymentId}`);
-      const output = `Destroyed VM ${deploymentId}.`;
-
-      // 2. Recreate with the previous image if available.
-      //    SuperserveTarget doesn't track previous images internally —
-      //    the caller should pass `previous_image` in config if a specific
-      //    rollback target is desired. Otherwise we report success of the
-      //    destroy step.
-      const previousImage = config.previous_image as string | undefined;
-      if (previousImage) {
-        const vm = await superserveRequest<VmCreateResponse>(
-          ssConfig,
-          'POST',
-          '/vms',
-          {
-            name: `forge-rollback-${deploymentId}`,
-            image: previousImage,
-            env: (config.env as Record<string, string>) || {},
-            memory_mb: (config.memory_mb as number) || 512,
-            vcpus: (config.vcpus as number) || 2,
-            metadata: { deployment_id: deploymentId, rollback: 'true' },
-          },
-        );
-
-        await waitForVmStatus(ssConfig, vm.id, 'running', 60_000);
-
-        return {
-          success: true,
-          previousVersion: previousImage,
-          output: `${output}\nRecreated VM ${vm.id} with image ${previousImage}.`,
-        };
-      }
-
-      return {
-        success: true,
-        output: `${output}\nNo previous_image specified in config; destroy-only rollback.`,
-      };
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error);
-      return {
-        success: false,
-        output: '',
-        error: `Rollback failed: ${message}`,
-      };
-    }
-  }
-
-  // -----------------------------------------------------------------------
-  // healthCheck
-  // -----------------------------------------------------------------------
 
   async healthCheck(deployment: DeployResult): Promise<HealthCheckResult> {
-    if (!deployment.deploymentId) {
-      return { healthy: false, error: 'No deployment ID available' };
+    const sandboxId = this.sandboxIds.get(deployment.deploymentId);
+
+    if (!sandboxId) {
+      return {
+        healthy: false,
+        error: `No sandbox found for deployment "${deployment.deploymentId}"`,
+      };
     }
 
     try {
       const start = Date.now();
 
-      // Attempt the health URL if available (requires config, so we use the
-      // healthCheckUrl stored in the DeployResult from the deploy step).
-      if (deployment.healthCheckUrl) {
-        const response = await fetch(deployment.healthCheckUrl, {
-          signal: AbortSignal.timeout(10_000),
-        });
+      // Primary: try curling a health endpoint
+      const curlResult = await this.execInSandbox(
+        sandboxId,
+        'curl -sf http://localhost:8000/health 2>/dev/null && echo "OK"'
+      );
+
+      if (curlResult.exit_code === 0) {
         return {
-          healthy: response.ok,
-          statusCode: response.status,
+          healthy: true,
+          statusCode: 200,
           responseTimeMs: Date.now() - start,
-          output: await response.text().catch(() => ''),
+          output: curlResult.stdout.trim(),
         };
       }
 
-      // Fallback: return healthy if we had a successful deployment with a URL
-      // but no explicit health endpoint configured.
+      // Fallback: check if the service process is alive
+      const psResult = await this.execInSandbox(
+        sandboxId,
+        'pgrep -f "uvicorn|target/release" > /dev/null 2>&1 && echo "running" || echo "stopped"'
+      );
+      const isRunning = psResult.stdout.trim() === 'running';
+
       return {
-        healthy: deployment.success,
+        healthy: isRunning,
         responseTimeMs: Date.now() - start,
-        output: 'No health check URL configured; using deployment success status',
+        output: isRunning
+          ? 'Service process is running (health endpoint unavailable)'
+          : 'Service process is not running',
+        error: isRunning ? undefined : 'Service process is not running',
       };
     } catch (error) {
       return {
@@ -522,4 +304,202 @@ export class SuperserveTarget implements DeployTarget {
       };
     }
   }
+
+  async rollback(
+    deploymentId: string,
+    config: Record<string, unknown>
+  ): Promise<RollbackResult> {
+    this.apiKey = config.api_key as string;
+
+    const sandboxId = this.sandboxIds.get(deploymentId);
+
+    if (!sandboxId) {
+      return {
+        success: true,
+        output: `No active sandbox found for deployment "${deploymentId}" — nothing to roll back`,
+      };
+    }
+
+    try {
+      await this.destroySandbox(sandboxId);
+      this.sandboxIds.delete(deploymentId);
+
+      return {
+        success: true,
+        previousVersion: 'destroyed',
+        output: `Destroyed Superserve sandbox ${sandboxId} for deployment ${deploymentId}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        output: '',
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Failed to destroy sandbox during rollback',
+      };
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Superserve API helpers
+  // ----------------------------------------------------------
+
+  private headers(): Record<string, string> {
+    return {
+      'Content-Type': 'application/json',
+      'X-API-Key': this.apiKey,
+    };
+  }
+
+  private async apiRequest<T>(
+    method: string,
+    endpoint: string,
+    body?: Record<string, unknown>
+  ): Promise<T> {
+    const url = `${SUPERSEEVE_API_BASE}${endpoint}`;
+    const init: RequestInit = {
+      method,
+      headers: this.headers(),
+    };
+
+    if (body !== undefined) {
+      init.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(url, init);
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => 'unknown error');
+      throw new Error(
+        `Superserve API ${method} ${endpoint} returned ${response.status}: ${text}`
+      );
+    }
+
+    // Some endpoints (DELETE) may return empty body
+    const text = await response.text();
+    return text ? (JSON.parse(text) as T) : (undefined as unknown as T);
+  }
+
+  private async createSandbox(name: string): Promise<Sandbox> {
+    return this.apiRequest<Sandbox>('POST', '/sandboxes', { name });
+  }
+
+  private async destroySandbox(sandboxId: string): Promise<void> {
+    await this.apiRequest<void>('DELETE', `/sandboxes/${sandboxId}`);
+  }
+
+  private async execInSandbox(
+    sandboxId: string,
+    command: string
+  ): Promise<ExecResult> {
+    return this.apiRequest<ExecResult>('POST', `/sandboxes/${sandboxId}/exec`, {
+      command,
+    });
+  }
+
+  private async writeFileToSandbox(
+    sandboxId: string,
+    filePath: string,
+    content: string
+  ): Promise<void> {
+    await this.apiRequest<void>('POST', `/sandboxes/${sandboxId}/files`, {
+      path: filePath,
+      content,
+    });
+  }
+
+  // ----------------------------------------------------------
+  // File handling
+  // ----------------------------------------------------------
+
+  /** Recursively collect all project files, skipping common non-source dirs. */
+  private async collectFiles(dir: string): Promise<string[]> {
+    const SKIP_DIRS = new Set([
+      'node_modules',
+      '.git',
+      'target',
+      '__pycache__',
+      '.venv',
+      'venv',
+      '.mypy_cache',
+      '.pytest_cache',
+    ]);
+
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const files: string[] = [];
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue; // skip hidden files/dirs
+
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        files.push(...(await this.collectFiles(fullPath)));
+      } else {
+        files.push(fullPath);
+      }
+    }
+
+    return files;
+  }
+
+  /** Upload every file in projectDir into the sandbox at /app/<relative>. */
+  private async uploadProjectFiles(
+    sandboxId: string,
+    projectDir: string
+  ): Promise<void> {
+    const files = await this.collectFiles(projectDir);
+
+    // Ensure the /app directory exists inside the sandbox
+    await this.execInSandbox(sandboxId, 'mkdir -p /app');
+
+    for (const file of files) {
+      const relativePath = path.relative(projectDir, file);
+      const content = await fs.readFile(file, 'utf-8');
+      const sandboxPath = `/app/${relativePath}`;
+
+      // Ensure parent directory exists
+      const parentDir = path.dirname(sandboxPath);
+      await this.execInSandbox(sandboxId, `mkdir -p ${parentDir}`);
+
+      await this.writeFileToSandbox(sandboxId, sandboxPath, content);
+    }
+  }
+}
+
+// ============================================================
+// Shared utilities
+// ============================================================
+
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function detectProjectType(
+  projectDir: string
+): Promise<ProjectType | null> {
+  if (await fileExists(path.join(projectDir, 'Cargo.toml'))) {
+    return 'rust';
+  }
+  if (
+    (await fileExists(path.join(projectDir, 'requirements.txt'))) ||
+    (await fileExists(path.join(projectDir, 'pyproject.toml')))
+  ) {
+    return 'python';
+  }
+  return null;
+}
+
+async function countProjectFiles(projectDir: string): Promise<number> {
+  const instance = new SuperserveTarget();
+  // We access the private method through the instance — it's the same class.
+  // Using a small helper to avoid duplication:
+  const files = await (instance as unknown as { collectFiles(d: string): Promise<string[]> }).collectFiles(projectDir);
+  return files.length;
 }

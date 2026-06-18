@@ -176,7 +176,7 @@ export interface RuntimeConfig {
 
 export interface SpacetimeConfig {
   host: string;
-  db_name: string;
+  database: string;
 }
 
 // ---------------------------------------------------------------------------

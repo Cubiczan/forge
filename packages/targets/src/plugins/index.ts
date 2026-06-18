@@ -13,3 +13,4 @@ export type {
 // Re-export plugins
 export { RustServiceTarget } from './rust-service.js';
 export { PythonApiTarget } from './python-api.js';
+export { SuperserveTarget } from './superserve.js';

@@ -28,10 +28,20 @@ agents:
     temperature: 0.1
 
 deploy:
-  target: rust-service
+  target: superserve
   config:
-    registry: ghcr.io
-    image_prefix: myorg/
+    api_key: ${SUPERSERVE_API_KEY}
+    image: debian:bookworm-slim
+    memory_mb: 512
+    vcpus: 2
+    health_path: /health
+    port: 8080
+
+  # Alternative: Docker-based Rust service
+  # target: rust-service
+  # config:
+  #   registry: ghcr.io
+  #   image_prefix: myorg/
 
 runtime:
   max_pipeline_duration_ms: 600000  # 10 minutes
@@ -48,5 +58,6 @@ runtime:
     - git
 
 spacetime:
-  host: http://localhost:3000
+  host: https://spacetimedb.com
   db_name: forge_feedback
+  # token: <optional-auth-token>

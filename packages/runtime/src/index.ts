@@ -37,6 +37,28 @@ export type { ToolExecutor as ToolExecutorInterface } from './tools/index.js';
 // Feedback
 export { FeedbackStore } from './feedback/index.js';
 
+// SpacetimeDB (drop-in persistent replacement for FeedbackStore)
+export {
+  SpacetimeDBClient,
+  SpacetimeFeedbackStore,
+  createSpacetimeFeedbackStore,
+  SPACETIME_TABLES,
+} from './spacetime/index.js';
+export type {
+  SpacetimeDBConnectionConfig,
+  AgentRunsRow,
+  DeploymentsRow,
+  FeedbackRow,
+  AgentVersionsRow,
+  RoutingWeightsRow,
+  RecordAgentRunInput,
+  RecordDeploymentInput,
+  SubmitFeedbackInput,
+  UpdateRoutingWeightInput,
+  AgentStats as SpacetimeAgentStats,
+  SpacetimeTableName,
+} from './spacetime/index.js';
+
 // Config
 export { loadForgeConfig, getExampleConfigPath } from './config/index.js';
 

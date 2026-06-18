@@ -11,6 +11,7 @@ pub enum OrchestratorError {
     PushFailed(String),
     Timeout(String),
     DockerApi(String),
+    SuperserveApi(String),
     Internal(String),
 }
 
@@ -41,6 +42,9 @@ impl fmt::Display for OrchestratorError {
             OrchestratorError::DockerApi(msg) => {
                 write!(f, "Docker API error: {}", msg)
             }
+            OrchestratorError::SuperserveApi(msg) => {
+                write!(f, "Superserve API error: {}", msg)
+            }
             OrchestratorError::Internal(msg) => {
                 write!(f, "Internal error: {}", msg)
             }
@@ -55,6 +59,7 @@ impl From<OrchestratorError> for Status {
         let code = match &err {
             OrchestratorError::ContainerNotFound(_) => Code::NotFound,
             OrchestratorError::ContainerAlreadyExists(_) => Code::AlreadyExists,
+            OrchestratorError::SuperserveApi(_) => Code::Unavailable,
             OrchestratorError::Timeout(_) => Code::DeadlineExceeded,
             _ => Code::Internal,
         };

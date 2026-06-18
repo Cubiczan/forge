@@ -37,11 +37,15 @@ deploy:
     health_path: /health
     port: 8080
 
-  # Alternative: Docker-based Rust service
+  # Alternative: direct Rust service target
   # target: rust-service
   # config:
-  #   registry: ghcr.io
-  #   image_prefix: myorg/
+  #   api_key: ${SUPERERSERVE_API_KEY}
+
+  # Alternative: direct Python API target
+  # target: python-api
+  # config:
+  #   api_key: ${SUPERSERVE_API_KEY}
 
 runtime:
   max_pipeline_duration_ms: 600000  # 10 minutes
@@ -50,7 +54,6 @@ runtime:
   allowed_shell_commands:
     - cargo
     - rustc
-    - docker
     - kubectl
     - npm
     - bun

@@ -17,16 +17,21 @@ const execAsync = promisify(exec);
 /**
  * Rust Service deploy target.
  *
- * Builds a Rust project into a Docker image and deploys it.
- * Supports cargo build locally or Docker-based builds.
+ * Builds a Rust project locally via cargo, then deploys into a
+ * Superserve Firecracker microVM.
  */
 export class RustServiceTarget implements DeployTarget {
   readonly name = 'rust-service';
-  readonly description = 'Build and deploy Rust services as Docker containers';
+  readonly description = 'Build Rust services and deploy to Superserve Firecracker microVMs';
+
+  /** Map of deploymentId → sandbox ID for health checks and rollback */
+  private sandboxIds = new Map<string, string>();
+  private apiKey = '';
+  private readonly apiBase = 'https://api.superserve.ai';
 
   validateConfig(config: Record<string, unknown>): void {
-    if (!config.registry && !config.image_prefix) {
-      // Not an error — will use defaults
+    if (!config.api_key || typeof config.api_key !== 'string') {
+      throw new Error('rust-service target requires a string "api_key" in deployment config');
     }
   }
 
@@ -35,7 +40,9 @@ export class RustServiceTarget implements DeployTarget {
     context.onProgress('Checking Cargo.toml...');
 
     const cargoPath = path.join(context.projectDir, 'Cargo.toml');
-    if (!(await fileExists(cargoPath))) {
+    try {
+      await fs.access(cargoPath);
+    } catch {
       return {
         success: false,
         output: '',
@@ -44,21 +51,18 @@ export class RustServiceTarget implements DeployTarget {
       };
     }
 
-    // Parse crate name from Cargo.toml
     const crateName = await parseCrateName(cargoPath);
     context.onProgress(`Building Rust crate: ${crateName}`);
 
-    // Run cargo build in release mode
     try {
       context.onProgress('Running cargo build --release...');
       const { stdout, stderr } = await execAsync('cargo build --release', {
         cwd: context.projectDir,
-        timeout: 600000, // 10 min
+        timeout: 600000,
         maxBuffer: 10 * 1024 * 1024,
       });
 
       const binaryPath = path.join(context.projectDir, 'target', 'release', crateName);
-
       return {
         success: true,
         artifactPath: binaryPath,
@@ -77,7 +81,8 @@ export class RustServiceTarget implements DeployTarget {
   }
 
   async deploy(context: DeployContext): Promise<DeployResult> {
-    const { config, buildResult, deploymentId } = context;
+    const { projectDir, config, buildResult, deploymentId, onProgress } = context;
+    this.apiKey = config.api_key as string;
 
     if (!buildResult.success || !buildResult.artifactPath) {
       return {
@@ -89,87 +94,162 @@ export class RustServiceTarget implements DeployTarget {
     }
 
     const start = Date.now();
-    const registry = (config.registry as string) || 'ghcr.io';
-    const imagePrefix = (config.image_prefix as string) || 'forge/';
-    const imageName = `${registry}/${imagePrefix}app:${deploymentId}`;
 
-    context.onProgress(`Building Docker image: ${imageName}`);
-
-    // Check for Dockerfile
-    const dockerfilePath = path.join(context.projectDir, 'Dockerfile');
-    if (!(await fileExists(dockerfilePath))) {
-      // Generate a minimal Dockerfile for the Rust binary
-      context.onProgress('No Dockerfile found, generating one...');
-      await generateDockerfile(context.projectDir, buildResult.artifactPath);
-    }
-
-    // Build Docker image
     try {
-      const { stdout } = await execAsync(
-        `docker build -t ${imageName} ${context.projectDir}`,
-        {
-          cwd: context.projectDir,
-          timeout: 300000,
-          maxBuffer: 10 * 1024 * 1024,
-        }
+      // Create a Superserve sandbox for this deployment
+      onProgress('Creating Superserve Firecracker microVM...');
+      const sandbox = await this.apiRequest<{ id: string }>('POST', '/sandboxes', { name: `forge-rust-${deploymentId}` });
+      const sandboxId = sandbox.id;
+      this.sandboxIds.set(deploymentId, sandboxId);
+      onProgress(`Sandbox created: ${sandboxId}`);
+
+      // Upload project files to the sandbox
+      onProgress('Uploading project files...');
+      await this.uploadProjectFiles(sandboxId, projectDir);
+
+      // Build inside the sandbox
+      onProgress('Building Rust service inside microVM...');
+      const buildRes = await this.apiRequest<{ stdout: string; stderr: string; exit_code: number }>(
+        'POST', `/sandboxes/${sandboxId}/exec`, { command: 'cd /app && cargo build --release 2>&1' }
       );
+      if (buildRes.exit_code !== 0) {
+        throw new Error(`Cargo build in sandbox failed: ${buildRes.stderr || buildRes.stdout}`);
+      }
+
+      // Start the binary
+      onProgress('Starting Rust service in microVM...');
+      await this.apiRequest('POST', `/sandboxes/${sandboxId}/exec`, {
+        command: 'cd /app && nohup ./target/release/app > /tmp/service.log 2>&1 &',
+      });
 
       return {
         success: true,
         deploymentId,
-        imageTag: imageName,
-        output: stdout,
+        url: `sandbox://${sandboxId}`,
+        healthCheckUrl: `sandbox://${sandboxId}/health`,
+        version: 'rust',
+        output: `Deployed to Superserve sandbox ${sandboxId}`,
       };
-    } catch (error: unknown) {
-      const err = error as { stderr?: string; message?: string };
+    } catch (error) {
       return {
         success: false,
         deploymentId,
         output: '',
-        error: err.stderr || err.message || 'Docker build failed',
+        error: error instanceof Error ? error.message : 'Deployment failed',
       };
     }
   }
 
-  async rollback(_deploymentId: string, _config: Record<string, unknown>): Promise<RollbackResult> {
-    return {
-      success: true,
-      previousVersion: 'previous',
-      output: 'Rollback completed (simulated)',
-    };
+  async rollback(deploymentId: string, _config: Record<string, unknown>): Promise<RollbackResult> {
+    const sandboxId = this.sandboxIds.get(deploymentId);
+    if (!sandboxId) {
+      return {
+        success: true,
+        output: `No active sandbox for deployment "${deploymentId}" — nothing to roll back`,
+      };
+    }
+
+    try {
+      await this.apiRequest('DELETE', `/sandboxes/${sandboxId}`);
+      this.sandboxIds.delete(deploymentId);
+      return {
+        success: true,
+        previousVersion: 'destroyed',
+        output: `Destroyed Superserve sandbox ${sandboxId}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        output: '',
+        error: error instanceof Error ? error.message : 'Rollback failed',
+      };
+    }
   }
 
   async healthCheck(deployment: DeployResult): Promise<HealthCheckResult> {
-    if (!deployment.healthCheckUrl) {
-      return { healthy: false, error: 'No health check URL configured' };
+    const sandboxId = this.sandboxIds.get(deployment.deploymentId);
+    if (!sandboxId) {
+      return { healthy: false, error: `No sandbox for deployment "${deployment.deploymentId}"` };
     }
 
     try {
       const start = Date.now();
-      const response = await fetch(deployment.healthCheckUrl, {
-        signal: AbortSignal.timeout(10000),
-      });
+      const result = await this.apiRequest<{ stdout: string; exit_code: number }>(
+        'POST', `/sandboxes/${sandboxId}/exec`,
+        { command: 'curl -sf http://localhost:8080/health 2>/dev/null && echo "OK"' }
+      );
+
+      if (result.exit_code === 0) {
+        return { healthy: true, statusCode: 200, responseTimeMs: Date.now() - start, output: result.stdout.trim() };
+      }
+
+      // Fallback: check process
+      const ps = await this.apiRequest<{ stdout: string; exit_code: number }>(
+        'POST', `/sandboxes/${sandboxId}/exec`,
+        { command: 'pgrep -f "target/release" > /dev/null 2>&1 && echo "running" || echo "stopped"' }
+      );
+      const running = ps.stdout.trim() === 'running';
       return {
-        healthy: response.ok,
-        statusCode: response.status,
+        healthy: running,
         responseTimeMs: Date.now() - start,
-        output: await response.text(),
+        output: running ? 'Service process running' : 'Service not running',
+        error: running ? undefined : 'Service process not running',
       };
     } catch (error) {
-      return {
-        healthy: false,
-        error: error instanceof Error ? error.message : 'Health check failed',
-      };
+      return { healthy: false, error: error instanceof Error ? error.message : 'Health check failed' };
     }
   }
-}
 
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
+  // -----------------------------------------------------------------------
+  // Superserve API helpers
+  // -----------------------------------------------------------------------
+
+  private headers(): Record<string, string> {
+    return { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey };
+  }
+
+  private async apiRequest<T>(method: string, endpoint: string, body?: Record<string, unknown>): Promise<T> {
+    const url = `${this.apiBase}${endpoint}`;
+    const init: RequestInit = { method, headers: this.headers() };
+    if (body) init.body = JSON.stringify(body);
+    const res = await fetch(url, init);
+    if (!res.ok) {
+      const text = await res.text().catch(() => 'unknown');
+      throw new Error(`Superserve ${method} ${endpoint} → ${res.status}: ${text}`);
+    }
+    const text = await res.text();
+    return text ? JSON.parse(text) : (undefined as unknown as T);
+  }
+
+  private async uploadProjectFiles(sandboxId: string, projectDir: string): Promise<void> {
+    const SKIP = new Set(['node_modules', '.git', 'target', '__pycache__', '.venv']);
+    const collect = async (dir: string): Promise<string[]> => {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      const out: string[] = [];
+      for (const e of entries) {
+        if (e.name.startsWith('.') || SKIP.has(e.name)) continue;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) out.push(...(await collect(full)));
+        else out.push(full);
+      }
+      return out;
+    };
+
+    const files = await collect(projectDir);
+    await this.apiRequest('POST', `/sandboxes/${sandboxId}/exec`, { command: 'mkdir -p /app' });
+
+    for (const file of files) {
+      const rel = path.relative(projectDir, file);
+      const content = await fs.readFile(file, 'utf-8');
+      const sandboxPath = `/app/${rel}`;
+      await this.apiRequest('POST', `/sandboxes/${sandboxId}/exec`, {
+        command: `mkdir -p ${path.dirname(sandboxPath)}`,
+      });
+      await this.apiRequest('POST', `/sandboxes/${sandboxId}/files`, {
+        path: sandboxPath,
+        content,
+      });
+    }
   }
 }
 
@@ -177,16 +257,4 @@ async function parseCrateName(cargoPath: string): Promise<string> {
   const content = await fs.readFile(cargoPath, 'utf-8');
   const match = content.match(/name\s*=\s*"([^"]+)"/);
   return match ? match[1] : 'app';
-}
-
-async function generateDockerfile(projectDir: string, _binaryPath: string): Promise<void> {
-  const dockerfile = `FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-COPY target/release/app /app/app
-RUN chmod +x /app/app
-EXPOSE 8080
-CMD ["/app/app"]
-`;
-  await fs.writeFile(path.join(projectDir, 'Dockerfile'), dockerfile);
 }

@@ -74,8 +74,9 @@ agents:
     temperature: 0.1
 
 deploy:
-  target: docker
-  config: {}
+  target: superserve
+  config:
+    api_key: ${SUPERSERVE_API_KEY}
 
 runtime:
   max_pipeline_duration_ms: 600000
@@ -84,7 +85,6 @@ runtime:
   allowed_shell_commands:
     - cargo
     - rustc
-    - docker
     - kubectl
     - npm
     - bun

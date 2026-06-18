@@ -1,8 +1,9 @@
 use std::net::SocketAddr;
 use tracing_subscriber::EnvFilter;
 
-use forge_orchestrator::container::InMemoryContainerManager;
+use forge_orchestrator::container::ContainerManager;
 use forge_orchestrator::server::OrchestratorService;
+use forge_orchestrator::superserve::{SuperserveConfig, SuperserveManager};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -16,8 +17,18 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = "0.0.0.0:50051".parse()?;
     tracing::info!("Forge Orchestrator starting on {}", addr);
 
-    // Use in-memory manager for dev; replace with Docker manager for production
-    let container_manager = InMemoryContainerManager::new();
+    // Use Superserve Firecracker microVMs for container orchestration.
+    // Set SUPERSEEVE_API_KEY env var or pass directly.
+    let api_key = std::env::var("SUPERSEEVE_API_KEY")
+        .expect("SUPERSEEVE_API_KEY environment variable required");
+    let config = SuperserveConfig {
+        api_key,
+        base_url: "https://api.superserve.ai".to_string(),
+        default_memory_mb: 512,
+        default_vcpus: 2,
+    };
+    let container_manager: Box<dyn ContainerManager> =
+        Box::new(SuperserveManager::new(config));
     let service = OrchestratorService::new(container_manager).into_server();
 
     // Add graceful shutdown

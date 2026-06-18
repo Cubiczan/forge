@@ -19,17 +19,16 @@ interface DeployResult {
 
 export async function runDeploy(opts: DeployOptions): Promise<DeployResult> {
   const deploymentId = `dep-${nanoid(8)}`;
-  const target = opts.targetOverride || 'docker';
+  const target = opts.targetOverride || 'superserve';
 
   opts.onEvent({ agent: 'deployer', message: `Deploying to ${target}...`, level: 'info' });
   opts.onEvent({ agent: 'deployer', message: 'Building image...', level: 'info' });
 
   // In a real implementation, this would:
   // 1. Load config and determine target
-  // 2. Build Docker image via orchestrator gRPC
-  // 3. Push to registry
-  // 4. Deploy to target environment
-  // 5. Run verification (unless --no-verify)
+  // 2. Build project (cargo build / pip install)
+  // 3. Deploy to Superserve Firecracker microVM
+  // 4. Run verification (unless --no-verify)
 
   return {
     success: true,

@@ -8,27 +8,20 @@
 //! - `feedback`    — feedback entries driving the self-improvement flywheel
 //! - `agent_versions` — agent config versioning
 //! - `routing_weights` — model routing weights updated by feedback
-//!
-//! ## Build & Publish
-//! ```sh
-//! cargo build --target wasm32-unknown-unknown --release
-//! spacetime publish --module-path target/wasm32-unknown-unknown/release/forge_spacetime.wasm
-//! ```
 
-use spacetimedb::{ReducerContext, SpacetimeType, Table, UniqueColumn, table, reducer};
+use spacetimedb::{ReducerContext, SpacetimeType, Table};
 
 // ---------------------------------------------------------------------------
 // Table definitions
 // ---------------------------------------------------------------------------
 
 /// Every agent execution within a pipeline.
-#[table(name = agent_runs, public)]
+#[spacetimedb::table(name = "agent_runs", accessor = agent_runs)]
 pub struct AgentRuns {
     #[primary_key]
     #[auto_inc]
     pub id: u64,
 
-    /// Caller-provided unique run ID (nanoid or UUID).
     #[index(btree)]
     pub run_id: String,
 
@@ -51,19 +44,17 @@ pub struct AgentRuns {
     pub status: String,
 
     pub error_message: Option<String>,
-    /// Milliseconds since Unix epoch.
     pub started_at: i64,
     pub completed_at: Option<i64>,
 }
 
 /// Deployment lifecycle tracking.
-#[table(name = deployments, public)]
+#[spacetimedb::table(name = "deployments", accessor = deployments)]
 pub struct Deployments {
     #[primary_key]
     #[auto_inc]
     pub id: u64,
 
-    /// Caller-provided deployment ID.
     #[index(btree)]
     pub deployment_id: String,
 
@@ -77,7 +68,6 @@ pub struct Deployments {
     pub status: String,
 
     pub commit_sha: Option<String>,
-    /// Milliseconds since Unix epoch.
     pub started_at: i64,
     pub completed_at: Option<i64>,
     pub health_check_url: Option<String>,
@@ -85,7 +75,7 @@ pub struct Deployments {
 }
 
 /// Feedback entries — core signal for the self-improvement flywheel.
-#[table(name = feedback, public)]
+#[spacetimedb::table(name = "feedback", accessor = feedback)]
 pub struct Feedback {
     #[primary_key]
     #[auto_inc]
@@ -94,7 +84,6 @@ pub struct Feedback {
     #[index(btree)]
     pub deployment_id: String,
 
-    /// References AgentRuns.run_id.
     #[index(btree)]
     pub agent_run_id: String,
 
@@ -102,12 +91,11 @@ pub struct Feedback {
     pub outcome: String,
     pub score: f64,
     pub signal_data_json: String,
-    /// Milliseconds since Unix epoch.
     pub created_at: i64,
 }
 
 /// Agent config versioning for the self-improvement loop.
-#[table(name = agent_versions, public)]
+#[spacetimedb::table(name = "agent_versions", accessor = agent_versions)]
 pub struct AgentVersions {
     #[primary_key]
     #[auto_inc]
@@ -120,7 +108,6 @@ pub struct AgentVersions {
     pub version: String,
 
     pub config_json: String,
-    /// Milliseconds since Unix epoch.
     pub created_at: i64,
 
     #[index(btree)]
@@ -128,7 +115,7 @@ pub struct AgentVersions {
 }
 
 /// Model routing weights updated by the feedback flywheel.
-#[table(name = routing_weights, public)]
+#[spacetimedb::table(name = "routing_weights", accessor = routing_weights)]
 pub struct RoutingWeights {
     #[primary_key]
     #[auto_inc]
@@ -142,12 +129,11 @@ pub struct RoutingWeights {
     pub weight: f64,
     pub success_rate: f64,
     pub sample_count: u32,
-    /// Milliseconds since Unix epoch.
     pub updated_at: i64,
 }
 
 // ---------------------------------------------------------------------------
-// Reducer argument types (must derive SpacetimeType for reducer args)
+// Reducer argument types
 // ---------------------------------------------------------------------------
 
 #[derive(SpacetimeType)]
@@ -205,8 +191,7 @@ pub struct RoutingWeightInput {
 // Reducers
 // ---------------------------------------------------------------------------
 
-/// Insert an agent run record.
-#[reducer]
+#[spacetimedb::reducer]
 pub fn record_agent_run(ctx: &ReducerContext, input: AgentRunInput) {
     ctx.db.agent_runs().insert(AgentRuns {
         id: 0,
@@ -228,8 +213,7 @@ pub fn record_agent_run(ctx: &ReducerContext, input: AgentRunInput) {
     });
 }
 
-/// Insert a deployment record.
-#[reducer]
+#[spacetimedb::reducer]
 pub fn record_deployment(ctx: &ReducerContext, input: DeploymentInput) {
     ctx.db.deployments().insert(Deployments {
         id: 0,
@@ -246,13 +230,8 @@ pub fn record_deployment(ctx: &ReducerContext, input: DeploymentInput) {
     });
 }
 
-/// Submit feedback and auto-update routing weights.
-///
-/// Looks up the agent run by `agent_run_id` (matching `AgentRuns.run_id`),
-/// inserts the feedback row, then recalculates routing weights.
-#[reducer]
+#[spacetimedb::reducer]
 pub fn submit_feedback(ctx: &ReducerContext, input: FeedbackInput) {
-    // 1. Look up the agent run by run_id.
     let agent_run = ctx
         .db
         .agent_runs()
@@ -262,7 +241,6 @@ pub fn submit_feedback(ctx: &ReducerContext, input: FeedbackInput) {
 
     let now_ms = to_millis(ctx.timestamp);
 
-    // 2. Insert the feedback row regardless of whether we find the agent run.
     ctx.db.feedback().insert(Feedback {
         id: 0,
         deployment_id: input.deployment_id.clone(),
@@ -274,7 +252,6 @@ pub fn submit_feedback(ctx: &ReducerContext, input: FeedbackInput) {
         created_at: now_ms,
     });
 
-    // 3. If we found the agent run, update routing weights.
     if let Some(run) = agent_run {
         recalculate_weights(
             ctx,
@@ -286,8 +263,7 @@ pub fn submit_feedback(ctx: &ReducerContext, input: FeedbackInput) {
     }
 }
 
-/// Manually set a routing weight for a specific agent type + provider + model.
-#[reducer]
+#[spacetimedb::reducer]
 pub fn update_routing_weight(ctx: &ReducerContext, input: RoutingWeightInput) {
     let now_ms = to_millis(ctx.timestamp);
 
@@ -319,8 +295,7 @@ pub fn update_routing_weight(ctx: &ReducerContext, input: RoutingWeightInput) {
     }
 }
 
-/// Set an agent version as active (deactivates all others for that agent).
-#[reducer]
+#[spacetimedb::reducer]
 pub fn activate_agent_version(
     ctx: &ReducerContext,
     agent_name: String,
@@ -329,7 +304,6 @@ pub fn activate_agent_version(
 ) {
     let now_ms = to_millis(ctx.timestamp);
 
-    // Deactivate all existing versions for this agent.
     for mut v in ctx.db.agent_versions().agent_name().filter(&agent_name) {
         if v.is_active {
             v.is_active = false;
@@ -337,7 +311,6 @@ pub fn activate_agent_version(
         }
     }
 
-    // Check if this version already exists.
     let existing = ctx
         .db
         .agent_versions()
@@ -364,12 +337,10 @@ pub fn activate_agent_version(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a SpacetimeDB Timestamp (microseconds since epoch) to milliseconds.
 fn to_millis(ts: spacetimedb::Timestamp) -> i64 {
     ts.to_micros_since_unix_epoch() / 1000
 }
 
-/// Recalculate routing weights for a specific agent + provider + model combo.
 fn recalculate_weights(
     ctx: &ReducerContext,
     agent_name: &str,
@@ -377,13 +348,15 @@ fn recalculate_weights(
     model_id: &str,
     outcome: &str,
 ) {
-    // Gather all feedback entries that reference agent runs for this agent+provider+model.
     let matching_run_ids: std::collections::HashSet<String> = ctx
         .db
         .agent_runs()
-        .agent_name()
-        .filter(agent_name)
-        .filter(|r| r.model_provider == model_provider && r.model_id == model_id)
+        .iter()
+        .filter(|r| {
+            r.agent_name == agent_name
+                && r.model_provider == model_provider
+                && r.model_id == model_id
+        })
         .map(|r| r.run_id.clone())
         .collect();
 
@@ -419,7 +392,6 @@ fn recalculate_weights(
     });
 
     if let Some(mut row) = existing {
-        // Exponentially-weighted moving average.
         row.weight = (row.weight + weight) / 2.0;
         row.success_rate = success_rate;
         row.sample_count = total_feedback;

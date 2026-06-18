@@ -63,7 +63,8 @@ pub struct PushResult {
     pub digest: String,
 }
 
-/// Trait for container operations. Implementations can use Docker, podman, etc.
+/// Trait for container/VM operations. Implementations include Superserve (Firecracker microVMs),
+/// podman, etc.
 #[allow(async_fn_in_trait)]
 pub trait ContainerManager: Send + Sync {
     /// Create and start a new container
@@ -93,7 +94,7 @@ pub trait ContainerManager: Send + Sync {
     /// Get container status
     async fn get_container_status(&self, container_id: &str) -> Result<ContainerInfo, String>;
 
-    /// Build a Docker image
+    /// Build a project image (stub — Superserve builds in-VM)
     async fn build_image(
         &self,
         dockerfile_path: &str,
@@ -116,7 +117,7 @@ pub trait ContainerManager: Send + Sync {
 }
 
 /// In-memory ContainerManager for development and testing.
-/// In production, replace with a Docker/podman implementation.
+/// In production, use SuperserveManager for Firecracker microVM orchestration.
 pub struct InMemoryContainerManager {
     containers: tokio::sync::RwLock<HashMap<String, ContainerInfo>>,
 }

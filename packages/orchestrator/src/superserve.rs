@@ -36,7 +36,7 @@ impl SuperserveConfig {
     pub fn from_env() -> Result<Self, OrchestratorError> {
         Ok(Self {
             api_key: std::env::var("SUPERSERVE_API_KEY")
-                .map_err(|_| OrchestratorError::SuperserveApi(
+                .map_err(|_| OrchestratorError::Internal(
                     "SUPERSERVE_API_KEY environment variable not set".into(),
                 ))?,
             base_url: std::env::var("SUPERSERVE_BASE_URL")

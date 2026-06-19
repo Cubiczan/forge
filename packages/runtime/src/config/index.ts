@@ -38,7 +38,7 @@ const ForgeConfigSchema = z.object({
   spacetime: z
     .object({
       host: z.string(),
-      db_name: z.string(),
+      database: z.string(),
     })
     .optional(),
 });

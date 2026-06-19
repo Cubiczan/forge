@@ -65,10 +65,14 @@ pub struct PushResult {
 
 /// Trait for container/VM operations. Implementations include Superserve (Firecracker microVMs),
 /// podman, etc.
-#[allow(async_fn_in_trait)]
+///
+/// The async methods use `-> impl Future<Output = ...> + Send` (RPITIT) rather than the
+/// `async fn` sugar so that the returned futures are guaranteed `Send`. This is required
+/// because these methods are awaited from within tonic gRPC service handlers, whose futures
+/// must be `Send` to be spawned across threads.
 pub trait ContainerManager: Send + Sync {
     /// Create and start a new container
-    async fn create_container(
+    fn create_container(
         &self,
         pipeline_id: &str,
         agent_name: &str,
@@ -77,43 +81,53 @@ pub trait ContainerManager: Send + Sync {
         labels: HashMap<String, String>,
         timeout: Duration,
         mounts: &[(String, String, bool)], // (source, target, read_only)
-    ) -> Result<ContainerInfo, String>;
+    ) -> impl std::future::Future<Output = Result<ContainerInfo, String>> + Send;
 
     /// Execute a command inside a container
-    async fn exec_command(
+    fn exec_command(
         &self,
         container_id: &str,
         command: &[String],
         timeout: Duration,
         working_dir: Option<&str>,
-    ) -> Result<ExecResult, String>;
+    ) -> impl std::future::Future<Output = Result<ExecResult, String>> + Send;
 
     /// Stop and remove a container
-    async fn destroy_container(&self, container_id: &str, force: bool) -> Result<bool, String>;
+    fn destroy_container(
+        &self,
+        container_id: &str,
+        force: bool,
+    ) -> impl std::future::Future<Output = Result<bool, String>> + Send;
 
     /// Get container status
-    async fn get_container_status(&self, container_id: &str) -> Result<ContainerInfo, String>;
+    fn get_container_status(
+        &self,
+        container_id: &str,
+    ) -> impl std::future::Future<Output = Result<ContainerInfo, String>> + Send;
 
     /// Build a project image (stub — Superserve builds in-VM)
-    async fn build_image(
+    fn build_image(
         &self,
         dockerfile_path: &str,
         context_path: &str,
         tag: &str,
         build_args: HashMap<String, String>,
-    ) -> Result<BuildResult, String>;
+    ) -> impl std::future::Future<Output = Result<BuildResult, String>> + Send;
 
     /// Push an image to a registry
-    async fn push_image(
+    fn push_image(
         &self,
         image_tag: &str,
         registry: &str,
         username: &str,
         password: &str,
-    ) -> Result<PushResult, String>;
+    ) -> impl std::future::Future<Output = Result<PushResult, String>> + Send;
 
     /// Get resource usage for a container
-    async fn get_resource_usage(&self, container_id: &str) -> Result<ResourceUsage, String>;
+    fn get_resource_usage(
+        &self,
+        container_id: &str,
+    ) -> impl std::future::Future<Output = Result<ResourceUsage, String>> + Send;
 }
 
 /// In-memory ContainerManager for development and testing.

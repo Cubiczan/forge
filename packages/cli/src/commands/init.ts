@@ -76,7 +76,7 @@ agents:
 deploy:
   target: superserve
   config:
-    api_key: ${SUPERSERVE_API_KEY}
+    api_key: \${SUPERSERVE_API_KEY}
 
 runtime:
   max_pipeline_duration_ms: 600000

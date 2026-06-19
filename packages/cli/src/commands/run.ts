@@ -36,7 +36,10 @@ export async function runPipeline(
   const config = loadConfig(opts.configPath);
   const feedbackStore = new FeedbackStore();
   const router = new ModelRouter(config);
-  const tools = new ToolExecutorImpl(config.runtime.allowed_shell_commands);
+  const tools = new ToolExecutorImpl({
+    allowedCommands: config.runtime.allowed_shell_commands,
+    maxShellCommands: config.runtime.max_shell_commands,
+  });
 
   const pipelineId = `pipe-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const pipelineConfig = createDefaultPipeline(pipelineId);

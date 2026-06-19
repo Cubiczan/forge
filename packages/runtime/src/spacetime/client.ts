@@ -44,7 +44,7 @@ import type {
 export interface SpacetimeDBConnectionConfig {
   /** SpacetimeDB host URL. Defaults to https://spacetimedb.com */
   host?: string;
-  /** Database name (as configured in forge.yaml under `spacetime.db_name`). */
+  /** Database name (as configured in forge.yaml under `spacetime.database`). */
   dbName: string;
   /** Optional auth token. If omitted the SDK uses anonymous auth. */
   token?: string;
@@ -367,7 +367,7 @@ export class SpacetimeDBClient {
  * // In forge.yaml:
  * // spacetime:
  * //   host: https://spacetimedb.com
- * //   db_name: forge-prod
+ * //   database: forge-prod
  *
  * const store = new SpacetimeFeedbackStore({
  *   host: 'https://spacetimedb.com',
@@ -754,6 +754,6 @@ export function createSpacetimeFeedbackStore(
 ): SpacetimeFeedbackStore {
   return new SpacetimeFeedbackStore({
     host: config.host,
-    dbName: config.db_name,
+    dbName: config.database,
   });
 }

@@ -223,7 +223,7 @@ export class SpacetimeDBFeedbackStore {
     ]);
 
     // Group runs by agent name
-    const byAgentName: Record<string, { runs: QueryRow[] }> = {};
+    const byAgentName: Record<string, QueryRow[]> = {};
     for (const r of runRows) {
       const name = (r.agent_name as string) || 'unknown';
       (byAgentName[name] ?? (byAgentName[name] = [])).push(r);

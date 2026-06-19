@@ -93,7 +93,11 @@ impl<M: ContainerManager + 'static> Orchestrator for OrchestratorService<M> {
                 &req.container_id,
                 &command,
                 timeout,
-                req.working_dir.as_deref(),
+                if req.working_dir.is_empty() {
+                    None
+                } else {
+                    Some(req.working_dir.as_str())
+                },
             )
             .await
             .map_err(|e| Status::internal(e))?;
@@ -123,7 +127,11 @@ impl<M: ContainerManager + 'static> Orchestrator for OrchestratorService<M> {
         let container_id = req.container_id.clone();
         let command: Vec<String> = req.command;
         let timeout = Duration::from_secs(req.timeout_seconds.max(1) as u64);
-        let working_dir = req.working_dir.clone();
+        let working_dir = if req.working_dir.is_empty() {
+            None
+        } else {
+            Some(req.working_dir.clone())
+        };
 
         let (tx, rx) = mpsc::channel(4);
 
@@ -131,6 +139,7 @@ impl<M: ContainerManager + 'static> Orchestrator for OrchestratorService<M> {
         let result = self
             .container_manager
             .exec_command(&container_id, &command, timeout, working_dir.as_deref())
+            // working_dir is now Option<String>, so as_deref() yields Option<&str>
             .await;
 
         match result {

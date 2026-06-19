@@ -1,5 +1,6 @@
 import type {
   AgentRun,
+  AgentRunStatus,
   AgentType,
   Deployment,
   FeedbackEntry,
@@ -66,8 +67,8 @@ async function sqlQuery<T = Record<string, unknown>>(
     throw new Error(`SpacetimeDB SQL query failed (${res.status}): ${text}`);
   }
 
-  const data = await res.json();
   // The API returns { sql_error?: ..., rows?: T[] }
+  const data = (await res.json()) as { sql_error?: string; rows?: T[] };
   if (data.sql_error) {
     throw new Error(`SpacetimeDB SQL error: ${data.sql_error}`);
   }
@@ -320,7 +321,7 @@ export class FeedbackStore {
           tokensIn: row.tokens_in,
           tokensOut: row.tokens_out,
           latencyMs: row.latency_ms,
-          status: row.status,
+          status: row.status as AgentRunStatus,
           errorMessage: row.error_message ?? undefined,
           startedAt: row.started_at,
           completedAt: row.completed_at ?? undefined,

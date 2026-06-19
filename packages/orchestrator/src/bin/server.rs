@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use tracing_subscriber::EnvFilter;
 
-use forge_orchestrator::container::ContainerManager;
 use forge_orchestrator::server::OrchestratorService;
 use forge_orchestrator::superserve::{SuperserveConfig, SuperserveManager};
 
@@ -27,8 +26,10 @@ async fn main() -> anyhow::Result<()> {
         default_memory_mb: 512,
         default_vcpus: 2,
     };
-    let container_manager: Box<dyn ContainerManager> =
-        Box::new(SuperserveManager::new(config));
+    // OrchestratorService is generic over the ContainerManager impl, so we pass the
+    // concrete SuperserveManager directly (no trait object). The ContainerManager trait
+    // uses RPITIT for Send-guaranteed futures, which is not dyn-compatible.
+    let container_manager = SuperserveManager::new(config);
     let service = OrchestratorService::new(container_manager).into_server();
 
     // Add graceful shutdown

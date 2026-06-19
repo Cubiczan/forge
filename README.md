@@ -469,6 +469,63 @@ Please read `SCOPE.md` for the full architectural vision and design decisions be
 
 ---
 
+## MAPS Integration
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Built%20with-MAPS%20%7C%20Multi-Agent%20Pipeline%20Skills-blue" alt="MAPS" />
+</p>
+
+Forge's multi-agent pipeline architecture maps directly to the [MAPS framework](https://mojoaistudio.com/maps/) (Multi-Agent Pipeline Skills) for structured agent system development.
+
+### M Layer (Multi-Agent System) — Phase Mapping
+
+| MAPS Phase | Forge Component |
+|------------|-----------------|
+| **M0 Foundation** | `forge.yaml` project config — intent, runtime constraints, model bindings |
+| **M1 System Shape** | Multi-Agent track — Planner → Coder ⇄ Reviewer → Deployer → Verifier |
+| **M2 Roster** | 5 specialized agents defined in `@forge/runtime` |
+| **M3 Contracts** | DAG pipeline edges, Coder ⇄ Reviewer loop contract (max 3 rounds) |
+| **M4 Coordination** | DAG-based conditional routing via topological sort |
+| **M5 Agent Buildout** | Each agent extends `BaseAgent` with versioned prompts, tools, model bindings |
+| **M6 Capabilities** | Tool executor plugin system (file, shell, search, HTTP) |
+| **M7 Orchestration** | `PipelineEngine` DAG execution with conditional edges |
+| **M8 Experience** | Next.js 16 dashboard (5 tabs: Overview, Pipelines, Agents, Feedback, Deployments) |
+| **M9 Evaluate** | Verifier agent health checks + smoke tests |
+| **M10 Deploy** | Deploy target plugins (Rust Service, Python API, Docker) |
+| **M11 Improve** | Feedback Flywheel — outcome analysis → prompt tuning → weight adjustment |
+
+### APS Layer (Per-Agent Pipeline)
+
+Each Forge agent follows the MAPS APS lifecycle:
+
+```
+A1 Define ─▶ A2 Design ─▶ A3 Build ─▶ A4 Equip ─▶ A5 Evaluate ─▶ A6 Deploy ─▶ A7 Observe ─▶ A8 Improve
+```
+
+- **Define (A1)**: Agent brief — role, model binding, temperature, max tokens in `forge.yaml`
+- **Design (A2)**: Agent interface via `BaseAgent` — tool set, prompt template, routing profile
+- **Build (A3)**: Implementation in `@forge/runtime` with typed inputs/outputs
+- **Equip (A4)**: Tool executor assignment, model router weights, capability map
+- **Evaluate (A5)**: Reviewer agent with Coder ⇄ Reviewer loop (max 3 rounds), Verifier smoke tests
+- **Deploy (A6)**: Deploy target plugin execution (Docker image build, registry push)
+- **Observe (A7)**: Dashboard monitoring — per-agent success rate, latency, token consumption
+- **Improve (A8)**: Feedback Flywheel — routing weight auto-tuning, prompt versioning from outcomes
+
+### Recommended MAPS Skills
+
+| Skill | Use Case |
+|-------|----------|
+| `/foundation` | Initialize Forge project with MAPS M0 preflight |
+| `/shape` | Validate Multi-Agent track decision |
+| `/define-agent` | Brief new custom agents for Phase 5 (user-defined agents) |
+| `/build-agent++` | Incremental agent development with TDD for new agent types |
+| `/equip-agent` | Capability mapping for tool permissions and model bindings |
+| `/evaluate-agent++` | LangSmith/Phoenix tracing for agent eval suites |
+| `/observe-agent` | Dashboard + trace integration for production monitoring |
+| `/improve-agent` | Improvement backlog driven by flywheel outcomes |
+
+---
+
 ## License
 
 MIT

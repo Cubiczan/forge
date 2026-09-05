@@ -182,6 +182,7 @@ Three deployment target type cards (Rust Service, Python API, Docker) are shown 
 |-----------|-----------|---------|
 | Runtime | TypeScript 5.7, Node.js 22 | Agent execution, pipeline engine, model routing |
 | Orchestrator | Rust (tokio, tonic 0.12, prost 0.13) | Container lifecycle via gRPC |
+| Observability | PRISMtrace on BlockConvey | Model-call traces for Anthropic/OpenAI |
 | CLI | TypeScript, Commander.js | User-facing command-line interface |
 | Deploy Targets | TypeScript, plugin system | Pluggable deployment backends |
 | Web Dashboard | Next.js 16, Tailwind CSS v4, shadcn/ui, Recharts | Real-time monitoring and control |
@@ -191,6 +192,14 @@ Three deployment target type cards (Rust Service, Python API, Docker) are shown 
 | Durability | Workflow SDK (planned) | Step/replay for crash recovery |
 | Build System | Turborepo, tsup | Monorepo build orchestration |
 | Config | YAML + Zod validation | Project configuration |
+
+### PRISMtrace configuration
+
+Set these environment variables to enable BlockConvey-hosted traces:
+
+- `PRISMTRACE_API_KEY`
+- `PRISMTRACE_PROJECT_ID`
+- `PRISMTRACE_HOST` (optional; defaults to `https://api.prism.blockconvey.com`)
 
 ---
 
@@ -337,6 +346,9 @@ runtime:
 |----------|------------|---------|
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude models | — |
 | `OPENAI_API_KEY` | OpenAI API key for GPT models | — |
+| `PRISMTRACE_API_KEY` | PRISMtrace API key | — |
+| `PRISMTRACE_PROJECT_ID` | PRISM project id | — |
+| `PRISMTRACE_HOST` | Optional PRISM host override | `https://api.prism.blockconvey.com` |
 | `FORGE_NO_DURABLE` | Set to `1` to skip Workflow SDK durability | — |
 | `RUST_LOG` | Rust logging level for orchestrator | `info` |
 

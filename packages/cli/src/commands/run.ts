@@ -12,6 +12,7 @@ import type { ForgeConfig, PipelineContext } from '@forge/runtime';
 import type { Message, ModelResponse } from '@forge/runtime';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import { tracePrismLLM } from '../observability/prism.js';
 
 interface RunOptions {
   configPath: string;
@@ -172,6 +173,7 @@ function createModelClient(config: ForgeConfig, opts: RunOptions, router: ModelR
 
     if (model.startsWith('claude') && anthropic) {
       opts.onEvent({ agent: 'router', message: `Routing to Anthropic: ${model}`, level: 'info' });
+      const startedAt = Date.now();
       const response = await anthropic.messages.create({
         model,
         max_tokens: agentConfig.maxTokens,
@@ -185,7 +187,7 @@ function createModelClient(config: ForgeConfig, opts: RunOptions, router: ModelR
       });
 
       const textBlock = response.content.find(b => b.type === 'text');
-      return {
+      const result = {
         content: textBlock?.text ?? '',
         toolCalls: [],
         usage: {
@@ -193,10 +195,27 @@ function createModelClient(config: ForgeConfig, opts: RunOptions, router: ModelR
           outputTokens: response.usage.output_tokens,
         },
       };
+      await tracePrismLLM({
+        traceId: model,
+        agentId: agentConfig.type,
+        agentName: agentConfig.name,
+        model,
+        inputMessages: messages.map(m => ({ role: m.role, content: m.content })),
+        output: textBlock?.text ?? '',
+        latencyMs: Date.now() - startedAt,
+        tokenCountInput: response.usage.input_tokens,
+        tokenCountOutput: response.usage.output_tokens,
+        metadata: {
+          provider: 'anthropic',
+          tool_calls: 0,
+        },
+      }).catch(() => undefined);
+      return result;
     }
 
     if (openai) {
       opts.onEvent({ agent: 'router', message: `Routing to OpenAI: ${model}`, level: 'info' });
+      const startedAt = Date.now();
       const response = await openai.chat.completions.create({
         model,
         max_tokens: agentConfig.maxTokens,
@@ -207,7 +226,7 @@ function createModelClient(config: ForgeConfig, opts: RunOptions, router: ModelR
         })),
       });
 
-      return {
+      const result = {
         content: response.choices[0]?.message?.content ?? '',
         toolCalls: response.choices[0]?.message?.tool_calls?.map(tc => ({
           id: tc.id,
@@ -219,6 +238,22 @@ function createModelClient(config: ForgeConfig, opts: RunOptions, router: ModelR
           outputTokens: response.usage?.completion_tokens ?? 0,
         },
       };
+      await tracePrismLLM({
+        traceId: model,
+        agentId: agentConfig.type,
+        agentName: agentConfig.name,
+        model,
+        inputMessages: messages.map(m => ({ role: m.role, content: m.content })),
+        output: response.choices[0]?.message?.content ?? '',
+        latencyMs: Date.now() - startedAt,
+        tokenCountInput: response.usage?.prompt_tokens ?? 0,
+        tokenCountOutput: response.usage?.completion_tokens ?? 0,
+        metadata: {
+          provider: 'openai',
+          tool_calls: response.choices[0]?.message?.tool_calls?.length ?? 0,
+        },
+      }).catch(() => undefined);
+      return result;
     }
 
     throw new Error(

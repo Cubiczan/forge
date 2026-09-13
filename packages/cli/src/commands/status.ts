@@ -33,7 +33,21 @@ export async function showStatus(opts: StatusOptions): Promise<ProjectStatus> {
   try {
     const fs = require('fs');
     const { parse } = require('yaml');
-    const configPath = require('path').join(process.cwd(), opts.configPath);
+    const pathMod = require('path') as typeof import('path');
+    const baseDir = process.cwd();
+    const requested = String(opts.configPath ?? '');
+    if (requested.includes('\0')) {
+      throw new Error('Invalid path');
+    }
+    const configPath = pathMod.resolve(baseDir, requested);
+    const relative = pathMod.relative(baseDir, configPath);
+    if (
+      relative === '..' ||
+      relative.startsWith(`..${pathMod.sep}`) ||
+      pathMod.isAbsolute(relative)
+    ) {
+      throw new Error(`Path escapes allowed directory: ${requested}`);
+    }
     if (fs.existsSync(configPath)) {
       const raw = fs.readFileSync(configPath, 'utf-8');
       const config = parse(raw);

@@ -6,6 +6,27 @@ import type { ToolDefinition, ToolResult } from '../types/index.js';
 
 const execAsync = promisify(exec);
 
+/**
+ * Resolve `userPath` against `baseDir` and reject anything that escapes the base.
+ * Absolute in-tree paths are allowed; `..` traversal and out-of-tree paths are not.
+ */
+export function resolveWithinBase(userPath: string, baseDir: string): string {
+  if (userPath.includes('\0')) {
+    throw new Error('Invalid path');
+  }
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(base, userPath);
+  const relative = path.relative(base, resolved);
+  if (
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error(`Path escapes allowed directory: ${userPath}`);
+  }
+  return resolved;
+}
+
 // ---------------------------------------------------------------------------
 // Public interface
 // ---------------------------------------------------------------------------
@@ -47,10 +68,16 @@ export class ToolExecutorImpl implements ToolExecutor {
   private allowedCommands: Set<string>;
   private commandCounter = 0;
   private maxCommands: number;
+  private baseDir: string;
 
-  constructor(opts?: { allowedCommands?: string[]; maxShellCommands?: number }) {
+  constructor(opts?: {
+    allowedCommands?: string[];
+    maxShellCommands?: number;
+    baseDir?: string;
+  }) {
     this.allowedCommands = new Set(opts?.allowedCommands ?? []);
     this.maxCommands = opts?.maxShellCommands ?? 100;
+    this.baseDir = path.resolve(opts?.baseDir ?? process.cwd());
     this.registerDefaults();
   }
 
@@ -156,8 +183,8 @@ export class ToolExecutorImpl implements ToolExecutor {
       // ---- file_read --------------------------------------------------------
       case 'file_read':
         return async (args) => {
-          const filePath = path.resolve(String(args.path ?? ''));
           try {
+            const filePath = resolveWithinBase(String(args.path ?? ''), this.baseDir);
             const content = await fs.readFile(filePath, 'utf-8');
             return { success: true, output: content, durationMs: 0 };
           } catch (error) {
@@ -173,9 +200,9 @@ export class ToolExecutorImpl implements ToolExecutor {
       // ---- file_write -------------------------------------------------------
       case 'file_write':
         return async (args) => {
-          const filePath = path.resolve(String(args.path ?? ''));
           const content = String(args.content ?? '');
           try {
+            const filePath = resolveWithinBase(String(args.path ?? ''), this.baseDir);
             await fs.mkdir(path.dirname(filePath), { recursive: true });
             await fs.writeFile(filePath, content, 'utf-8');
             return {
@@ -222,10 +249,13 @@ export class ToolExecutorImpl implements ToolExecutor {
             }
           }
 
-          const workingDir = String(args.working_dir ?? process.cwd());
           const timeoutMs = Number(args.timeout_ms ?? 60000);
 
           try {
+            const workingDir = resolveWithinBase(
+              String(args.working_dir ?? this.baseDir),
+              this.baseDir,
+            );
             const { stdout, stderr } = await execAsync(command, {
               cwd: workingDir,
               timeout: timeoutMs,
@@ -251,10 +281,10 @@ export class ToolExecutorImpl implements ToolExecutor {
       case 'search':
         return async (args) => {
           const pattern = String(args.pattern ?? '');
-          const searchPath = String(args.path ?? '.');
           const filePattern = String(args.file_pattern ?? '*');
 
           try {
+            const searchPath = resolveWithinBase(String(args.path ?? '.'), this.baseDir);
             // Escape double-quotes in the pattern to prevent injection
             const escaped = pattern.replace(/"/g, '\\"');
             let cmd = `rg --no-heading --line-number "${escaped}" "${searchPath}"`;

@@ -5,25 +5,29 @@ name: my-project
 language: rust
 
 agents:
+  # Default provider is Amazon Bedrock. Credentials come from the standard
+  # AWS credential chain. Region is AWS_REGION (default us-east-1).
+  # Nova Pro is the default model. Deployer and verifier use Nova Lite.
+  # To opt into OpenAI for one agent, set a gpt-* model id and OPENAI_API_KEY.
   planner:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 4096
     temperature: 0.2
   coder:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 8192
     temperature: 0.2
   reviewer:
-    model: gpt-4o
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 4096
     temperature: 0.1
     max_review_rounds: 3
   deployer:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-lite-v1:0
     max_tokens: 4096
     temperature: 0.1
   verifier:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-lite-v1:0
     max_tokens: 4096
     temperature: 0.1
 

@@ -52,24 +52,24 @@ language: ${opts.language}
 
 agents:
   coder:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 8192
     temperature: 0.2
   reviewer:
-    model: gpt-4o
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 4096
     temperature: 0.1
     max_review_rounds: 3
   planner:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 4096
     temperature: 0.2
   deployer:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-lite-v1:0
     max_tokens: 4096
     temperature: 0.1
   verifier:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-lite-v1:0
     max_tokens: 4096
     temperature: 0.1
 

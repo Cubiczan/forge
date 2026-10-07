@@ -1,0 +1,7 @@
+schema: spec-driven
+
+context: |
+  Forge is a TypeScript monorepo (packages/runtime, packages/cli) that runs a
+  multi-agent pipeline. The default LLM provider is Amazon Bedrock via the
+  Converse API. Amazon Nova Pro is the default model. Credentials come from
+  the standard AWS credential chain. OpenAI is an explicit per-agent opt-in.

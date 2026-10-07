@@ -1,4 +1,5 @@
-import type { AgentConfig, AgentRun, PipelineContext } from '../types/index.js';
+import type { AgentConfig, AgentRun, ModelProvider, PipelineContext, ToolDefinition } from '../types/index.js';
+import { inferModelProvider } from '../providers/models.js';
 
 // ---------------------------------------------------------------------------
 // Wire-format types shared across all agents
@@ -9,6 +10,8 @@ export interface Message {
   content: string;
   toolCallId?: string;
   toolCalls?: ToolCall[];
+  /** Set on tool-result messages so providers can report success or error. */
+  toolStatus?: 'success' | 'error';
 }
 
 export interface ToolCall {
@@ -28,6 +31,8 @@ export interface ModelResponse {
 
 export interface ToolExecutor {
   execute(name: string, args: Record<string, unknown>): Promise<ToolResult>;
+  /** Registered tool schemas, used to advertise tool use to the model. */
+  listTools?(): ToolDefinition[];
 }
 
 export interface ToolResult {
@@ -127,14 +132,22 @@ export abstract class BaseAgent {
         finalResponse = await modelClient(messages, this.config);
 
         if (finalResponse.toolCalls && finalResponse.toolCalls.length > 0) {
+          // The assistant turn has to stay in the transcript. Bedrock Converse
+          // requires the toolUse blocks before the matching toolResult blocks.
+          messages.push({
+            role: 'assistant',
+            content: finalResponse.content,
+            toolCalls: finalResponse.toolCalls,
+          });
           for (const toolCall of finalResponse.toolCalls) {
             const result = await tools.execute(toolCall.name, toolCall.arguments);
             messages.push({
               role: 'tool',
               content: result.success
                 ? result.output
-                : `Error: ${result.error}`,
+                : `Error: ${result.error ?? 'Tool failed'}`,
               toolCallId: toolCall.id,
+              toolStatus: result.success ? 'success' : 'error',
             });
           }
           // Loop again so the model can process tool results
@@ -181,11 +194,8 @@ export abstract class BaseAgent {
 
   // -- private helpers ------------------------------------------------------
 
-  private inferProvider(model: string): 'anthropic' | 'openai' {
-    if (model.startsWith('claude') || model.includes('anthropic')) {
-      return 'anthropic';
-    }
-    return 'openai';
+  private inferProvider(model: string): ModelProvider {
+    return inferModelProvider(model);
   }
 
   private generateId(): string {

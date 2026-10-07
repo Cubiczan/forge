@@ -96,7 +96,7 @@ export interface ModelRoute {
   weight: number;
 }
 
-export type ModelProvider = 'anthropic' | 'openai';
+export type ModelProvider = 'bedrock' | 'openai';
 
 export interface RoutingDecision {
   provider: ModelProvider;

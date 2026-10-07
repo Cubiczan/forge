@@ -8,10 +8,13 @@ import {
   FeedbackStore,
   ModelRouter,
 } from '@forge/runtime';
-import type { ForgeConfig, PipelineContext } from '@forge/runtime';
-import type { Message, ModelResponse } from '@forge/runtime';
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
+import type { ForgeConfig } from '@forge/runtime';
+import {
+  createModelClient as createForgeModelClient,
+  inferModelProvider,
+  providerLabel,
+} from '@forge/runtime';
+import type { ModelClientFn } from '@forge/runtime';
 import { tracePrismLLM } from '../observability/prism.js';
 
 interface RunOptions {
@@ -46,7 +49,7 @@ export async function runPipeline(
   const pipelineConfig = createDefaultPipeline(pipelineId);
 
   // Create model client
-  const modelClient = createModelClient(config, opts, router);
+  const modelClient = createModelClient(opts);
 
   // Use the durable pipeline (Workflow SDK) by default.
   // Falls back to the non-durable PipelineEngine when:
@@ -158,106 +161,36 @@ function loadConfig(configPath: string): ForgeConfig {
   }
 }
 
-type ModelClientFn = (messages: Message[], agentConfig: { model: string; maxTokens: number; temperature: number; type: string; name: string }) => Promise<ModelResponse>;
-
-function createModelClient(config: ForgeConfig, opts: RunOptions, router: ModelRouter): ModelClientFn {
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  const openaiKey = process.env.OPENAI_API_KEY;
-
-  const anthropic = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
-  const openai = openaiKey ? new OpenAI({ apiKey: openaiKey }) : null;
+function createModelClient(opts: RunOptions): ModelClientFn {
+  const inner = createForgeModelClient({
+    onRoute: ({ provider, model }) => {
+      opts.onEvent({
+        agent: 'router',
+        message: `Routing to ${providerLabel(provider)}: ${model}`,
+        level: 'info',
+      });
+    },
+  });
 
   return async (messages, agentConfig) => {
-    const decision = router.selectModel('coder'); // Will be overridden per-agent by pipeline
-    const model = agentConfig.model;
-
-    if (model.startsWith('claude') && anthropic) {
-      opts.onEvent({ agent: 'router', message: `Routing to Anthropic: ${model}`, level: 'info' });
-      const startedAt = Date.now();
-      const response = await anthropic.messages.create({
-        model,
-        max_tokens: agentConfig.maxTokens,
-        temperature: agentConfig.temperature,
-        messages: messages
-          .filter(m => m.role !== 'tool')
-          .map(m => ({
-            role: m.role === 'system' ? 'user' as const : m.role === 'assistant' ? 'assistant' as const : 'user' as const,
-            content: m.content,
-          })),
-      });
-
-      const textBlock = response.content.find(b => b.type === 'text');
-      const result = {
-        content: textBlock?.text ?? '',
-        toolCalls: [],
-        usage: {
-          inputTokens: response.usage.input_tokens,
-          outputTokens: response.usage.output_tokens,
-        },
-      };
-      await tracePrismLLM({
-        traceId: model,
-        agentId: agentConfig.type,
-        agentName: agentConfig.name,
-        model,
-        inputMessages: messages.map(m => ({ role: m.role, content: m.content })),
-        output: textBlock?.text ?? '',
-        latencyMs: Date.now() - startedAt,
-        tokenCountInput: response.usage.input_tokens,
-        tokenCountOutput: response.usage.output_tokens,
-        metadata: {
-          provider: 'anthropic',
-          tool_calls: 0,
-        },
-      }).catch(() => undefined);
-      return result;
-    }
-
-    if (openai) {
-      opts.onEvent({ agent: 'router', message: `Routing to OpenAI: ${model}`, level: 'info' });
-      const startedAt = Date.now();
-      const response = await openai.chat.completions.create({
-        model,
-        max_tokens: agentConfig.maxTokens,
-        temperature: agentConfig.temperature,
-        messages: messages.map(m => ({
-          role: m.role === 'system' ? 'system' : m.role === 'assistant' ? 'assistant' : 'user',
-          content: m.content,
-        })),
-      });
-
-      const result = {
-        content: response.choices[0]?.message?.content ?? '',
-        toolCalls: response.choices[0]?.message?.tool_calls?.map(tc => ({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: JSON.parse(tc.function.arguments),
-        })) ?? [],
-        usage: {
-          inputTokens: response.usage?.prompt_tokens ?? 0,
-          outputTokens: response.usage?.completion_tokens ?? 0,
-        },
-      };
-      await tracePrismLLM({
-        traceId: model,
-        agentId: agentConfig.type,
-        agentName: agentConfig.name,
-        model,
-        inputMessages: messages.map(m => ({ role: m.role, content: m.content })),
-        output: response.choices[0]?.message?.content ?? '',
-        latencyMs: Date.now() - startedAt,
-        tokenCountInput: response.usage?.prompt_tokens ?? 0,
-        tokenCountOutput: response.usage?.completion_tokens ?? 0,
-        metadata: {
-          provider: 'openai',
-          tool_calls: response.choices[0]?.message?.tool_calls?.length ?? 0,
-        },
-      }).catch(() => undefined);
-      return result;
-    }
-
-    throw new Error(
-      `No API key configured for model "${model}". Set ANTHROPIC_API_KEY or OPENAI_API_KEY.`
-    );
+    const startedAt = Date.now();
+    const result = await inner(messages, agentConfig);
+    const provider = inferModelProvider(agentConfig.model);
+    await tracePrismLLM({
+      traceId: agentConfig.model,
+      agentId: agentConfig.type,
+      agentName: agentConfig.name,
+      model: agentConfig.model,
+      inputMessages: messages.map(m => ({ role: m.role, content: m.content })),
+      output: result.content,
+      latencyMs: Date.now() - startedAt,
+      tokenCountInput: result.usage?.inputTokens,
+      tokenCountOutput: result.usage?.outputTokens,
+      metadata: {
+        provider,
+        tool_calls: result.toolCalls?.length ?? 0,
+      },
+    }).catch(() => undefined);
+    return result;
   };
 }

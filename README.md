@@ -162,7 +162,7 @@ Individual agent cards display per-agent metrics including success rate progress
 
 ### Feedback Tab
 
-The feedback flywheel visualization includes a grouped bar chart comparing Anthropic vs OpenAI routing weights across task types, a success rate trend area chart, routing details table, and a recent feedback feed with color-coded outcome indicators.
+The feedback flywheel visualization includes a grouped bar chart comparing routing weights across task types, a success rate trend area chart, routing details table, and a recent feedback feed with color-coded outcome indicators. The default provider is Amazon Bedrock (Nova); OpenAI appears only when an agent is explicitly opted into a GPT model.
 
 <p align="center">
   <img src="docs/images/forge-feedback.png" alt="Feedback Tab" width="800">
@@ -184,7 +184,7 @@ Three deployment target type cards (Rust Service, Python API, Docker) are shown 
 |-----------|-----------|---------|
 | Runtime | TypeScript 5.7, Node.js 22 | Agent execution, pipeline engine, model routing |
 | Orchestrator | Rust (tokio, tonic 0.12, prost 0.13) | Container lifecycle via gRPC |
-| Observability | PRISMtrace on BlockConvey | Model-call traces for Anthropic/OpenAI |
+| Observability | PRISMtrace on BlockConvey | Model-call traces for Amazon Bedrock and OpenAI |
 | CLI | TypeScript, Commander.js | User-facing command-line interface |
 | Deploy Targets | TypeScript, plugin system | Pluggable deployment backends |
 | Web Dashboard | Next.js 16, Tailwind CSS v4, shadcn/ui, Recharts | Real-time monitoring and control (planned — design stills in `docs/images/`, no `packages/web/` yet) |
@@ -215,7 +215,7 @@ The core engine. Contains the agent base class, all five agent implementations (
 
 **Key exports:**
 - `PipelineEngine` — DAG-based pipeline execution with Coder ⇄ Reviewer loop
-- `ModelRouter` — Multi-provider routing (Anthropic, OpenAI) with per-task weights
+- `ModelRouter` — Per-task routing. Amazon Nova on Bedrock is the default; OpenAI is an explicit opt-in
 - `BaseAgent` → `PlannerAgent`, `CoderAgent`, `ReviewerAgent`, `DeployerAgent`, `VerifierAgent`
 - `ToolExecutorImpl` — Built-in tools: `file_read`, `file_write`, `shell_exec`, `search`, `http_check`
 - `FeedbackStore` — In-memory feedback collection (SpacetimeDB-ready interface)
@@ -302,24 +302,24 @@ language: rust
 
 agents:
   planner:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 4096
     temperature: 0.2
   coder:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 8192
     temperature: 0.2
   reviewer:
-    model: gpt-4o
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 4096
     temperature: 0.1
     max_review_rounds: 3
   deployer:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-lite-v1:0
     max_tokens: 4096
     temperature: 0.1
   verifier:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-lite-v1:0
     max_tokens: 4096
     temperature: 0.1
 
@@ -348,8 +348,11 @@ runtime:
 
 | Variable | Description | Default |
 |----------|------------|---------|
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude models | — |
-| `OPENAI_API_KEY` | OpenAI API key for GPT models | — |
+| `AWS_REGION` | Bedrock region for the default Amazon Nova models | `us-east-1` |
+| `AWS_DEFAULT_REGION` | Fallback region when `AWS_REGION` is unset | `us-east-1` |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Optional static credentials. Omit them to use the rest of the AWS credential chain (shared config, `AWS_PROFILE`, or a task role) | — |
+| `AWS_PROFILE` | Optional named profile from the shared AWS config | — |
+| `OPENAI_API_KEY` | OpenAI API key, only when an agent model id is an explicit GPT / o-series model | — |
 | `PRISMTRACE_API_KEY` | PRISMtrace API key | — |
 | `PRISMTRACE_PROJECT_ID` | PRISM project id | — |
 | `PRISMTRACE_HOST` | Optional PRISM host override | `https://api.prism.blockconvey.com` |

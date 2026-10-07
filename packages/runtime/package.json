@@ -16,7 +16,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.687.0",
     "spacetimedb": "^2.6.0",
     "openai": "^4.80.0",
     "yaml": "^2.7.0",

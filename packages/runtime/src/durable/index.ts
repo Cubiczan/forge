@@ -52,6 +52,7 @@ import {
 } from '../agents/index.js';
 import { ModelRouter } from '../router/index.js';
 import { createDefaultPipeline } from '../pipeline/index.js';
+import { configWithModelAndTools } from '../providers/agent-tools.js';
 
 // Workflow SDK imports
 import {
@@ -472,7 +473,11 @@ export class DurablePipeline {
 
   private routeConfig(node: PipelineNode): AgentConfig {
     const routing = this.router.selectModel(node.agentType);
-    return { ...node.config, model: routing.modelId };
+    return configWithModelAndTools(
+      node.config,
+      routing.modelId,
+      this.toolExecutor.listTools?.() ?? [],
+    );
   }
 
   private createAgent(type: AgentType, config: AgentConfig): BaseAgent {

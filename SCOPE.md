@@ -231,8 +231,8 @@ opt out). For production SaaS deployment, use `@workflow/next` to wrap API route
 
 Multi-provider routing with self-tuning weights:
 
-- **Providers**: Anthropic (Claude), OpenAI (GPT-4, o-series)
-- **Routing strategy**: Per-task-type routing (planning → Claude Opus, coding → Claude Sonnet, review → GPT-4o, etc.)
+- **Providers**: Amazon Bedrock (Amazon Nova) by default. OpenAI (GPT-4, o-series) is an explicit per-agent opt-in. Anthropic Claude is not a provider.
+- **Routing strategy**: Per-task-type routing (planner, coder, and reviewer → Amazon Nova Pro; deployer and verifier → Amazon Nova Lite)
 - **Self-tuning**: `RoutingWeights` table in SpacetimeDB adjusts based on feedback outcomes
 - **Fallback chain**: If primary model fails, automatically falls back to secondary
 
@@ -251,11 +251,11 @@ Each agent is defined by:
 
 | Agent | Role | Primary Model | Tools |
 |-------|------|--------------|-------|
-| Planner | Decompose request, build plan | claude-sonnet-4-20250514 | file_read, search |
-| Coder | Write/modify code | claude-sonnet-4-20250514 | file_read, file_write, shell_exec, search |
-| Reviewer | Code review, quality gates | gpt-4o | file_read, search |
-| Deployer | Build and deploy to target | claude-sonnet-4-20250514 | shell_exec, file_read |
-| Verifier | Post-deploy health checks | claude-sonnet-4-20250514 | http_check, shell_exec |
+| Planner | Decompose request, build plan | us.amazon.nova-pro-v1:0 | file_read, search |
+| Coder | Write/modify code | us.amazon.nova-pro-v1:0 | file_read, file_write, shell_exec, search |
+| Reviewer | Code review, quality gates | us.amazon.nova-pro-v1:0 | file_read, search |
+| Deployer | Build and deploy to target | us.amazon.nova-lite-v1:0 | shell_exec, file_read |
+| Verifier | Post-deploy health checks | us.amazon.nova-lite-v1:0 | http_check, shell_exec |
 
 ---
 
@@ -267,11 +267,11 @@ language: rust
 
 agents:
   coder:
-    model: claude-sonnet-4-20250514
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 8192
     temperature: 0.2
   reviewer:
-    model: gpt-4o
+    model: us.amazon.nova-pro-v1:0
     max_tokens: 4096
     temperature: 0.1
     max_review_rounds: 3

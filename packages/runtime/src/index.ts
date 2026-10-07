@@ -62,6 +62,21 @@ export type {
 // Config
 export { loadForgeConfig, getExampleConfigPath } from './config/index.js';
 
+// Model providers (Amazon Bedrock is the default)
+export {
+  createModelClient,
+  inferModelProvider,
+  providerLabel,
+  defaultModelForAgent,
+  resolveBedrockRegion,
+  bedrockClientConfig,
+  createBedrockRuntimeClient,
+  NOVA_PRO_MODEL_ID,
+  NOVA_LITE_MODEL_ID,
+  DEFAULT_BEDROCK_REGION,
+  type CreateModelClientOptions,
+} from './providers/index.js';
+
 // Durable Pipeline (Workflow SDK integration)
 export {
   DurablePipeline,

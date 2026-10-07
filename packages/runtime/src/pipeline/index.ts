@@ -25,6 +25,8 @@ import {
 } from '../agents/index.js';
 
 import { ModelRouter } from '../router/index.js';
+import { configWithModelAndTools } from '../providers/agent-tools.js';
+import { defaultModelForAgent } from '../providers/models.js';
 
 // ---------------------------------------------------------------------------
 // Internal helper types
@@ -286,10 +288,11 @@ export class PipelineEngine {
    */
   private createRoutedAgent(node: PipelineNode): BaseAgent | null {
     const routing = this.router.selectModel(node.agentType);
-    const configWithModel: AgentConfig = {
-      ...node.config,
-      model: routing.modelId,
-    };
+    const configWithModel = configWithModelAndTools(
+      node.config,
+      routing.modelId,
+      this.toolExecutor.listTools?.() ?? [],
+    );
     return this.createAgent({ ...node, config: configWithModel });
   }
 
@@ -483,7 +486,7 @@ export function createDefaultPipeline(pipelineId: string): PipelineConfig {
         config: {
           name: 'planner',
           type: 'planner',
-          model: 'claude-sonnet-4-20250514',
+          model: defaultModelForAgent('planner'),
           maxTokens: 4096,
           temperature: 0.2,
           systemPrompt: '',
@@ -498,7 +501,7 @@ export function createDefaultPipeline(pipelineId: string): PipelineConfig {
         config: {
           name: 'coder',
           type: 'coder',
-          model: 'claude-sonnet-4-20250514',
+          model: defaultModelForAgent('coder'),
           maxTokens: 8192,
           temperature: 0.2,
           systemPrompt: '',
@@ -513,7 +516,7 @@ export function createDefaultPipeline(pipelineId: string): PipelineConfig {
         config: {
           name: 'reviewer',
           type: 'reviewer',
-          model: 'gpt-4o',
+          model: defaultModelForAgent('reviewer'),
           maxTokens: 4096,
           temperature: 0.1,
           systemPrompt: '',
@@ -528,7 +531,7 @@ export function createDefaultPipeline(pipelineId: string): PipelineConfig {
         config: {
           name: 'deployer',
           type: 'deployer',
-          model: 'claude-sonnet-4-20250514',
+          model: defaultModelForAgent('deployer'),
           maxTokens: 4096,
           temperature: 0.1,
           systemPrompt: '',
@@ -543,7 +546,7 @@ export function createDefaultPipeline(pipelineId: string): PipelineConfig {
         config: {
           name: 'verifier',
           type: 'verifier',
-          model: 'claude-sonnet-4-20250514',
+          model: defaultModelForAgent('verifier'),
           maxTokens: 4096,
           temperature: 0.1,
           systemPrompt: '',

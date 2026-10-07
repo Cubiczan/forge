@@ -29,8 +29,13 @@ services:
     environment:
       - SPACETIME_HOST=http://spacetime:3000
       - ORCHESTRATOR_ADDR=orchestrator:50051
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Amazon Bedrock (default LLM). Do not put access keys in this file.
+      # The runtime uses the standard AWS credential chain (env, shared
+      # config, or the task role). Region defaults to us-east-1.
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      # Only required when an agent model id is an explicit OpenAI model.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
 
 volumes:
   spacetimedata:

@@ -6,32 +6,19 @@ import type {
   FeedbackEntry,
   ForgeConfig,
 } from '../types/index.js';
+import { defaultModelForAgent, inferModelProvider, NOVA_PRO_MODEL_ID } from '../providers/models.js';
 
 // ---------------------------------------------------------------------------
-// Default model assignments per task type
+// Default model assignments per task type.
+// Amazon Nova on Bedrock is the only default. OpenAI is opt-in via forge.yaml.
 // ---------------------------------------------------------------------------
 
 const DEFAULT_ROUTES: Record<AgentType, ModelRoute[]> = {
-  planner: [
-    { provider: 'anthropic', modelId: 'claude-sonnet-4-20250514', weight: 0.8 },
-    { provider: 'openai', modelId: 'gpt-4o', weight: 0.2 },
-  ],
-  coder: [
-    { provider: 'anthropic', modelId: 'claude-sonnet-4-20250514', weight: 0.9 },
-    { provider: 'openai', modelId: 'gpt-4o', weight: 0.1 },
-  ],
-  reviewer: [
-    { provider: 'openai', modelId: 'gpt-4o', weight: 0.7 },
-    { provider: 'anthropic', modelId: 'claude-sonnet-4-20250514', weight: 0.3 },
-  ],
-  deployer: [
-    { provider: 'anthropic', modelId: 'claude-sonnet-4-20250514', weight: 0.8 },
-    { provider: 'openai', modelId: 'gpt-4o', weight: 0.2 },
-  ],
-  verifier: [
-    { provider: 'anthropic', modelId: 'claude-sonnet-4-20250514', weight: 0.8 },
-    { provider: 'openai', modelId: 'gpt-4o', weight: 0.2 },
-  ],
+  planner: [{ provider: 'bedrock', modelId: defaultModelForAgent('planner'), weight: 1 }],
+  coder: [{ provider: 'bedrock', modelId: defaultModelForAgent('coder'), weight: 1 }],
+  reviewer: [{ provider: 'bedrock', modelId: defaultModelForAgent('reviewer'), weight: 1 }],
+  deployer: [{ provider: 'bedrock', modelId: defaultModelForAgent('deployer'), weight: 1 }],
+  verifier: [{ provider: 'bedrock', modelId: defaultModelForAgent('verifier'), weight: 1 }],
 };
 
 // ---------------------------------------------------------------------------
@@ -86,10 +73,10 @@ export class ModelRouter {
     const routes = this.routes.get(taskType);
     if (!routes || routes.length === 0) {
       return {
-        provider: 'anthropic',
-        modelId: 'claude-sonnet-4-20250514',
+        provider: 'bedrock',
+        modelId: NOVA_PRO_MODEL_ID,
         taskType,
-        reason: 'No routes configured, using fallback',
+        reason: 'No routes configured, using Amazon Nova Pro on Bedrock',
       };
     }
 
@@ -223,9 +210,6 @@ export class ModelRouter {
   // -- private helpers ------------------------------------------------------
 
   private inferProvider(model: string): ModelProvider {
-    if (model.startsWith('claude') || model.includes('anthropic')) {
-      return 'anthropic';
-    }
-    return 'openai';
+    return inferModelProvider(model);
   }
 }
